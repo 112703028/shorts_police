@@ -14,7 +14,15 @@ BASE_STATE: SkipItState = {
 }
 
 MOCK_TRANSCRIPT = "今天來開箱這個超厲害的產品，買就對了，限時優惠..."
-MOCK_GPT = '{"result": "廣告推銷話術，誇大宣傳", "confidence": 0.9, "tags": ["廣告", "推銷"]}'
+
+MOCK_CONTENT = '{"transcript_summary": "推銷開箱影片", "content_result": "廣告推銷話術，誇大宣傳", "content_tags": ["廣告話術"]}'
+MOCK_TONE = '{"tone_result": "語調平板無語助詞", "is_tts": true, "has_filler_words": false, "tone_tags": ["TTS機器人聲"]}'
+
+
+def _mock_response(content: str) -> MagicMock:
+    response = MagicMock()
+    response.choices[0].message.content = content
+    return response
 
 
 def test_audio_agent_returns_output():
@@ -22,12 +30,31 @@ def test_audio_agent_returns_output():
          patch("builtins.open", mock_open(read_data=b"fake_audio")), \
          patch("agents.audio_agent._client") as mock_client:
         mock_client.audio.transcriptions.create.return_value.text = MOCK_TRANSCRIPT
-        mock_client.chat.completions.create.return_value.choices[0].message.content = MOCK_GPT
+        mock_client.chat.completions.create.side_effect = [
+            _mock_response(MOCK_CONTENT),
+            _mock_response(MOCK_TONE),
+        ]
         result = run_audio_agent(BASE_STATE)
 
-    assert result["audio_output"]["agent"] == "audio"
-    assert "廣告" in result["audio_output"]["tags"]
-    assert result["audio_output"]["confidence"] == 0.9
+    output = result["audio_output"]
+    assert output["agent"] == "audio"
+    assert "廣告話術" in output["tags"]
+    assert "TTS機器人聲" in output["tags"]
+    assert output["is_tts"] is True
+
+
+def test_audio_agent_no_speech_short_circuits():
+    with patch("agents.audio_agent.extract_audio", return_value=Path("tmp/test.mp3")), \
+         patch("builtins.open", mock_open(read_data=b"fake_audio")), \
+         patch("agents.audio_agent._client") as mock_client:
+        mock_client.audio.transcriptions.create.return_value.text = "  "
+        result = run_audio_agent(BASE_STATE)
+
+    output = result["audio_output"]
+    assert output["tags"] == ["無語音內容"]
+    assert output["confidence"] == 0.9
+    # 沒有語音時不應該再打 GPT 分析內容/語調
+    mock_client.chat.completions.create.assert_not_called()
 
 
 def test_audio_agent_sets_audio_path():
@@ -35,7 +62,10 @@ def test_audio_agent_sets_audio_path():
          patch("builtins.open", mock_open(read_data=b"fake_audio")), \
          patch("agents.audio_agent._client") as mock_client:
         mock_client.audio.transcriptions.create.return_value.text = MOCK_TRANSCRIPT
-        mock_client.chat.completions.create.return_value.choices[0].message.content = MOCK_GPT
+        mock_client.chat.completions.create.side_effect = [
+            _mock_response(MOCK_CONTENT),
+            _mock_response(MOCK_TONE),
+        ]
         result = run_audio_agent(BASE_STATE)
 
     assert Path(result["audio_path"]) == Path("tmp/test.mp3")
