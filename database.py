@@ -1,15 +1,24 @@
 import sqlite3
 import json
 import os
+from contextlib import contextmanager
 from datetime import datetime
 from config import DB_PATH, BLACKLIST_THRESHOLD, LOW_SCORE_THRESHOLD
 
 
-def _conn(db_path: str = None) -> sqlite3.Connection:
+@contextmanager
+def _conn(db_path: str = None):
     # 優先用傳入的 db_path，其次是測試用的環境變數覆寫，最後才是正式環境的 DB_PATH
+    # sqlite3.Connection 內建的 context manager 只處理 commit/rollback、不會關閉連線，
+    # 在 Windows 上會導致檔案句柄不釋放（測試刪 db 檔會報 PermissionError），這裡自己包一層確保 close()
     path = db_path or os.environ.get("DB_PATH_OVERRIDE") or DB_PATH
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    return sqlite3.connect(path)
+    conn = sqlite3.connect(path)
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def init_db(db_path: str = None) -> None:
@@ -87,6 +96,25 @@ def update_creator(creator_id: str, score: int, db_path: str = None) -> None:
                     "INSERT INTO creator_preferences (creator_id, status, avg_score, count, updated_at) VALUES (?,?,?,?,?)",
                     (creator_id, status, float(score), 1, datetime.now())
                 )
+
+
+def get_cached_analysis(url: str, db_path: str = None) -> dict | None:
+    # 同一支影片如果已經分析過，直接回傳最近一次結果，避免重複打 GPT/Whisper
+    with _conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT creator_id, score, summary, tags FROM analysis_history "
+            "WHERE url = ? ORDER BY id DESC LIMIT 1",
+            (url,)
+        ).fetchone()
+    if not row:
+        return None
+    creator_id, score, summary, tags = row
+    return {
+        "creator_id": creator_id,
+        "score": score,
+        "summary": summary,
+        "tags": json.loads(tags) if tags else [],
+    }
 
 
 def get_tag_dislike_count(tag: str, db_path: str = None) -> int:

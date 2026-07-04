@@ -9,11 +9,14 @@ from linebot.v3.messaging import (
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from graph import run_pipeline
-from config import LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN
+from database import get_cached_analysis
+from config import LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN, MAX_CONCURRENT_ANALYSES
 
 app = FastAPI()
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 _config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
+# 限制同時跑幾支影片的完整分析（下載+GPT+Whisper），避免多人同時貼連結時打爆 API/資源
+_analysis_semaphore = threading.Semaphore(MAX_CONCURRENT_ANALYSES)
 
 YT_SHORTS_PATTERN = re.compile(
     r"https?://(?:www\.)?youtube\.com/shorts/[\w-]+"
@@ -84,20 +87,34 @@ def handle_message(event: MessageEvent):
 
     def _analyze():
         try:
-            result = run_pipeline(url)
-            text = format_reply(
-                score=result["score"],
-                summary=result["summary"],
-                tags=result["tags"] or [],
-                creator_name=result.get("creator_name") or "",
-                early_stop=result.get("should_early_stop", False),
-            )
+            # 同一支影片如果分析過，直接用歷史紀錄回覆，不必重跑一次 GPT/Whisper
+            cached = get_cached_analysis(url)
+            if cached:
+                text = format_reply(
+                    score=cached["score"],
+                    summary=cached["summary"],
+                    tags=cached["tags"] or [],
+                    creator_name="",
+                    early_stop=False,
+                )
+            else:
+                with _analysis_semaphore:
+                    result = run_pipeline(url)
+                text = format_reply(
+                    score=result["score"],
+                    summary=result["summary"],
+                    tags=result["tags"] or [],
+                    creator_name=result.get("creator_name") or "",
+                    early_stop=result.get("should_early_stop", False),
+                )
         except Exception as e:
             text = f"❌ 分析失敗：{str(e)[:100]}"
         # reply_token 已經用掉了，這裡改用 push_message 主動推播結果
+        # 一對一聊天時 event.source 是 UserSource，沒有 group_id 屬性，用 getattr 避免 AttributeError
+        target_id = getattr(event.source, "group_id", None) or event.source.user_id
         with ApiClient(_config) as api_client:
             MessagingApi(api_client).push_message(
-                to=event.source.group_id or event.source.user_id,
+                to=target_id,
                 messages=[TextMessage(text=text)],
             )
 
