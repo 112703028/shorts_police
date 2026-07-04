@@ -13,7 +13,14 @@ BASE_STATE: SkipItState = {
     "score": None, "summary": None, "tags": None, "preference_updated": False,
 }
 
-MOCK_GPT_RESPONSE = '{"result": "AI 生成動物影片，畫面重複", "confidence": 0.85, "tags": ["AI生成", "無資訊價值"]}'
+MOCK_CONTENT = '{"content_result": "畫面重複，無資訊價值", "confidence": 0.85, "content_tags": ["重複畫面"]}'
+MOCK_AUTHENTICITY = '{"authenticity_result": "手指變形，疑似AI生成", "has_watermark": false, "is_ai_generated": true, "authenticity_tags": ["AI生成"]}'
+
+
+def _mock_response(content: str) -> MagicMock:
+    response = MagicMock()
+    response.choices[0].message.content = content
+    return response
 
 
 def test_vision_agent_returns_vision_output():
@@ -23,23 +30,34 @@ def test_vision_agent_returns_vision_output():
     with patch("agents.vision_agent.download_video", return_value=Path("tmp/test.mp4")), \
          patch("agents.vision_agent.extract_frames", return_value=[mock_frame] * 5), \
          patch("agents.vision_agent._client") as mock_client:
-        mock_client.chat.completions.create.return_value.choices[0].message.content = MOCK_GPT_RESPONSE
+        mock_client.chat.completions.create.side_effect = [
+            _mock_response(MOCK_CONTENT),
+            _mock_response(MOCK_AUTHENTICITY),
+        ]
         result = run_vision_agent(BASE_STATE)
 
-    assert result["vision_output"]["agent"] == "vision"
-    assert result["vision_output"]["confidence"] == 0.85
-    assert "AI生成" in result["vision_output"]["tags"]
+    output = result["vision_output"]
+    assert output["agent"] == "vision"
+    assert output["confidence"] == 0.85
+    assert "重複畫面" in output["tags"]
+    assert "AI生成" in output["tags"]
+    assert output["is_ai_generated"] is True
+    assert output["has_watermark"] is False
 
 
 def test_vision_agent_low_confidence_flag():
     mock_frame = MagicMock(spec=Path)
     mock_frame.read_bytes.return_value = b"fake"
-    low_conf = '{"result": "模糊畫面", "confidence": 0.2, "tags": []}'
+    low_conf = '{"content_result": "模糊畫面", "confidence": 0.2, "content_tags": []}'
+    no_authenticity_issue = '{"authenticity_result": "無異常", "has_watermark": false, "is_ai_generated": false, "authenticity_tags": []}'
 
     with patch("agents.vision_agent.download_video", return_value=Path("tmp/test.mp4")), \
          patch("agents.vision_agent.extract_frames", return_value=[mock_frame] * 5), \
          patch("agents.vision_agent._client") as mock_client:
-        mock_client.chat.completions.create.return_value.choices[0].message.content = low_conf
+        mock_client.chat.completions.create.side_effect = [
+            _mock_response(low_conf),
+            _mock_response(no_authenticity_issue),
+        ]
         result = run_vision_agent(BASE_STATE)
 
     assert result["vision_output"]["confidence"] < 0.3
