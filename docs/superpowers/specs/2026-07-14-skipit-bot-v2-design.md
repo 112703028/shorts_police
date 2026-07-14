@@ -161,19 +161,56 @@ class AgentState(TypedDict):
 
 ---
 
+## 使用者偏好收集機制
+
+三種管道收集偏好，共同餵給 `preference_agent` 更新 `taste_profile`：
+
+### 1. 主動收集 — 首次使用問卷（多選題）
+`user_id` 在 SQLite 查無 `taste_profile` 紀錄時（第一次跟 Bot 互動），Orchestrator 觸發一次性問卷，而不是直接跑分析：
+
+```
+👋 我是 SkipIt Bot，幫你判斷 YouTube Shorts 值不值得看。
+先了解一下你的偏好（可複選，用逗號分開回覆數字，例如 1,3）：
+
+1️⃣ 心靈雞湯/勵志語錄
+2️⃣ 開箱業配
+3️⃣ AI生成動物/寵物
+4️⃣ 標題黨/誇張縮圖
+5️⃣ 其他（請直接打字說明，不用選數字）
+0️⃣ 都沒有，讓我用久了再學
+
+有沒有想先封鎖的頻道？直接貼頻道名稱，沒有就回「無」。
+```
+
+使用者用數字回覆選項（可複選、可混打文字補充），或直接打「其他」的文字說明；沒有偏好就選 `0` 或回「無」。回覆內容送進 `preference_agent`（初始 `taste_profile` 視為空白），輸出寫成第一版 `taste_profile`。問卷只在**第一次**觸發，之後同一個 `user_id` 再傳連結就直接進正常分析流程。全部選「無/0」則寫入一份空白 `taste_profile`（五個區塊都留空），後續完全依賴被動學習。
+
+### 2. 主動收集 — 判定後 👍/👎
+如前述，每次判定完問使用者準不準，回覆內容送進 `preference_agent`。
+
+### 3. 被動收集 — 隱性黑名單訊號
+使用者不見得每次都會回覆 👍/👎。為了不完全依賴主動回饋，`preference_agent` 在**每次** `scoring_agent` 輸出後都會檢查（不只是收到使用者回饋時）：
+- 同一頻道**連續** N 支影片的 `verdict` 都是 `"trash"`（N 由 `IMPLICIT_BLACKLIST_THRESHOLD` 設定，預設 3）→ 即使使用者從未明確表態，也自動在 `taste_profile` 的「封鎖頻道」區塊加入該頻道，並附註「系統自動偵測，非使用者明確指示」，讓之後 Preference Agent 重寫時知道這條規則的信心程度比使用者親口說的低，使用者一旦有相反回饋可以直接覆蓋。
+
+> **技術限制說明**：「使用者是否點開連結」這類點擊追蹤，LINE Messaging API 沒有原生支援（純文字連結無法得知是否被點擊），除非額外接短網址服務並自建追蹤，這裡先不做，保留擴充空間即可。
+
+---
+
 ## LINE Bot 流程
 
 1. 群組有人傳 YouTube Shorts 連結
 2. Webhook 觸發 FastAPI `/webhook`
-3. Bot 立即回「分析中... ⏳」
-4. 背景非同步跑 LangGraph pipeline
-5. 完成後用 `push_message` 回群組：
+3. Orchestrator 查詢 `user_id` 是否已有 `taste_profile`：
+   - **沒有**（首次使用）→ 送出上述問卷，等待回覆後才開始分析
+   - **有** → 直接進入步驟 4
+4. Bot 立即回「分析中... ⏳」
+5. 背景非同步跑 LangGraph pipeline（`scoring_agent` 完成後，`preference_agent` 會先做一次被動的連續 trash 頻道檢查）
+6. 完成後用 `push_message` 回群組：
    ```
    ❌ 廢片（19分）— AI 生成動物，無資訊價值
 
    這個判定準確嗎？回覆 👍 或 👎
    ```
-6. 使用者回覆 👍 或 👎（或文字說明）→ 觸發 `preference_agent` 更新該使用者的 `taste_profile`
+7. 使用者回覆 👍 或 👎（或文字說明）→ 觸發 `preference_agent` 更新該使用者的 `taste_profile`
 
 ---
 
