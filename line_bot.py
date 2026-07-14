@@ -9,17 +9,38 @@ from linebot.v3.messaging import (
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from graph import run_pipeline
-from agents.feedback_agent import run_feedback_agent
-from config import LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN
+from agents.preference_agent import run_preference_agent
+from database import get_taste_profile
+from config import LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN, MAX_CONCURRENT_ANALYSES
 
 app = FastAPI()
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 _config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
+# 限制同時跑幾支影片的完整分析（下載+GPT+Whisper），避免多人同時貼連結時打爆 API/資源
+_analysis_semaphore = threading.Semaphore(MAX_CONCURRENT_ANALYSES)
+
+# process 內的暫存狀態（重啟就清空，demo 規模夠用，之後有需要再搬進 DB）：
+# 等問卷回覆的使用者 -> 他原本要分析的連結
+_pending_onboarding: dict[str, str] = {}
+# 等 👍/👎 回饋的使用者 -> 上一次判定結果（preference_agent 需要 tags 才能學習）
+_pending_feedback: dict[str, dict] = {}
 
 YT_SHORTS_PATTERN = re.compile(
     r"https?://(?:www\.)?youtube\.com/shorts/[\w-]+"
     r"|https?://youtu\.be/[\w-]+"
 )
+
+ONBOARDING_PROMPT = """👋 我是 SkipIt Bot，幫你判斷 YouTube Shorts 值不值得看。
+先了解一下你的偏好（可複選，用逗號分開回覆數字，例如 1,3）：
+
+1️⃣ 心靈雞湯/勵志語錄
+2️⃣ 開箱業配
+3️⃣ AI生成動物/寵物
+4️⃣ 標題黨/誇張縮圖
+5️⃣ 其他（請直接打字說明，不用選數字）
+0️⃣ 都沒有，讓我用久了再學
+
+有沒有想先封鎖的頻道？直接貼頻道名稱，沒有就回「無」。"""
 
 
 def extract_youtube_url(text: str) -> str | None:
@@ -28,19 +49,12 @@ def extract_youtube_url(text: str) -> str | None:
     return m.group(0) if m else None
 
 
-def format_reply(score: int, summary: str, tags: list[str],
-                  creator_name: str, early_stop: bool) -> str:
-    # 分數決定 emoji 跟廢片/普通/好片標籤，早停（黑名單）時額外附註
-    score_emoji = "✅" if score >= 7 else "⚠️" if score >= 5 else "❌"
-    label = "廢片" if score <= 4 else "普通" if score <= 6 else "好片"
-    tag_str = " ".join(f"#{t}" for t in tags) if tags else "無"
-    early_note = "\n⛔ 頻道已列入黑名單，略過完整分析" if early_stop else ""
+def format_reply(overall_score: int, verdict: str, summary: str) -> str:
+    verdict_emoji = {"trash": "❌", "review": "⚠️", "keep": "✅"}.get(verdict, "⚠️")
+    verdict_label = {"trash": "廢片", "review": "普通", "keep": "好片"}.get(verdict, "普通")
     return (
-        f"{score_emoji} {label}（{score}/10）\n"
-        f"📝 {summary}\n"
-        f"🏷️ {tag_str}\n"
-        f"👤 {creator_name or '未知頻道'}"
-        f"{early_note}"
+        f"{verdict_emoji} {verdict_label}（{overall_score}分）— {summary}\n\n"
+        f"這個判定準確嗎？回覆 👍 或 👎"
     )
 
 
@@ -48,11 +62,14 @@ def _reply(reply_token: str, text: str) -> None:
     # reply_token 只能用一次，且必須在收到 webhook 後短時間內回覆
     with ApiClient(_config) as api_client:
         MessagingApi(api_client).reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[TextMessage(text=text)],
-            )
+            ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=text)])
         )
+
+
+def _push(target_id: str, text: str) -> None:
+    # reply_token 已經用掉（或這則訊息不是回覆某個 webhook 事件），改用 push_message 主動推播
+    with ApiClient(_config) as api_client:
+        MessagingApi(api_client).push_message(to=target_id, messages=[TextMessage(text=text)])
 
 
 @app.get("/health")
@@ -74,40 +91,76 @@ async def webhook(
     return "OK"
 
 
+def _run_analysis(user_id: str, target_id: str, url: str) -> None:
+    try:
+        with _analysis_semaphore:
+            result = run_pipeline(user_id, url)
+    except Exception as e:
+        _push(target_id, f"❌ 分析失敗：{str(e)[:100]}")
+        return
+    # 記住這次判定，等使用者回覆 👍/👎 時才知道要把哪些 tags 餵給 preference_agent
+    _pending_feedback[user_id] = {
+        "tags": result.get("tags") or [],
+    }
+    text = format_reply(
+        overall_score=result.get("overall_score", 0),
+        verdict=result.get("verdict", "review"),
+        summary=result.get("summary", ""),
+    )
+    _push(target_id, text)
+
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event: MessageEvent):
-    url = extract_youtube_url(event.message.text)
-    if not url:
-        # 沒有連結 → 可能是對上次分析結果的回饋，交給 Feedback Agent 判斷
-        result = run_feedback_agent(event.message.text)
-        if result["is_feedback"]:
-            # 是回饋才回覆（附上學到的內容）；閒聊保持沉默不打擾群組
-            reply_text = result["reply"]
-            if result.get("learned"):
-                reply_text += f"\n🧠 學到：{result['learned']}"
-            _reply(event.reply_token, reply_text)
+    user_id = event.source.user_id
+    # 一對一聊天時 event.source 是 UserSource，沒有 group_id 屬性，用 getattr 避免 AttributeError
+    target_id = getattr(event.source, "group_id", None) or user_id
+    text = event.message.text.strip()
+    url = extract_youtube_url(text)
+
+    if url:
+        if user_id in _pending_onboarding:
+            # 還在等問卷回覆時又貼了連結，先更新成最新這支要分析的，不重複發問卷
+            _pending_onboarding[user_id] = url
+            _reply(event.reply_token, "還在等你回答上面的問卷喔，回覆完我就開始分析～")
+            return
+        if get_taste_profile(user_id) is None:
+            # 第一次互動：先問卷，分析留到問卷回覆後才開始
+            _pending_onboarding[user_id] = url
+            _reply(event.reply_token, ONBOARDING_PROMPT)
+            return
+        # 先立即回覆「分析中」，因為 reply_token 有時效性，完整分析要幾十秒跑不完
+        _reply(event.reply_token, "🔍 分析中，請稍後...")
+        threading.Thread(target=_run_analysis, args=(user_id, target_id, url), daemon=True).start()
         return
-    # 先立即回覆「分析中」，因為 reply_token 有時效性，完整分析要幾十秒跑不完
-    _reply(event.reply_token, "🔍 分析中，請稍後...")
 
-    def _analyze():
-        try:
-            result = run_pipeline(url)
-            text = format_reply(
-                score=result["score"],
-                summary=result["summary"],
-                tags=result["tags"] or [],
-                creator_name=result.get("creator_name") or "",
-                early_stop=result.get("should_early_stop", False),
-            )
-        except Exception as e:
-            text = f"❌ 分析失敗：{str(e)[:100]}"
-        # reply_token 已經用掉了，這裡改用 push_message 主動推播結果
-        with ApiClient(_config) as api_client:
-            MessagingApi(api_client).push_message(
-                to=event.source.group_id or event.source.user_id,
-                messages=[TextMessage(text=text)],
-            )
+    if user_id in _pending_onboarding:
+        # 這則訊息是問卷回覆：先建立初始 taste_profile，再分析原本等待的那支影片
+        pending_url = _pending_onboarding.pop(user_id)
+        _reply(event.reply_token, "已記錄你的偏好，開始分析剛剛那支影片... ⏳")
 
-    # 丟到背景執行緒跑，才不會擋住 webhook 的回應
-    threading.Thread(target=_analyze, daemon=True).start()
+        def _onboard_then_analyze():
+            run_preference_agent({
+                "user_id": user_id, "taste_profile": "",
+                "user_feedback": text, "tags": [],
+            })
+            _run_analysis(user_id, target_id, pending_url)
+
+        threading.Thread(target=_onboard_then_analyze, daemon=True).start()
+        return
+
+    if user_id in _pending_feedback:
+        # 這則訊息是判定後的 👍/👎（或文字說明），送進 preference_agent 更新 taste_profile
+        pending = _pending_feedback.pop(user_id)
+        existing_profile = get_taste_profile(user_id) or ""
+        threading.Thread(
+            target=run_preference_agent,
+            args=({
+                "user_id": user_id, "taste_profile": existing_profile,
+                "user_feedback": text, "tags": pending["tags"],
+            },),
+            daemon=True,
+        ).start()
+        return
+
+    # 其他訊息（沒連結、沒在等問卷/回饋）就忽略，不回覆
