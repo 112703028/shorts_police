@@ -1,5 +1,6 @@
 import base64
 import json
+from pathlib import Path
 from openai import OpenAI
 from downloader import download_video, extract_frames
 from models import AgentOutput, SkipItState
@@ -9,17 +10,25 @@ _client = OpenAI(api_key=OPENAI_API_KEY)
 
 VISION_PROMPT = """你是一個影片品質分析師。以下是一支 YouTube Shorts 的 {n} 張截圖（依時間順序）。
 
+除了畫面內容品質，請特別檢查「搬運／營銷號」的視覺特徵：
+- 畫面角落是否有 TikTok / 抖音浮水印、@帳號名稱、其他平台 logo
+- 是否為螢幕錄製（畫面有黑框、另一支手機邊框、電池/時間 UI）
+- 畫質是否有轉錄劣化（模糊、摩爾紋、重複壓縮痕跡）
+
 請判斷這支影片是否為「廢片」，回覆以下 JSON 格式（不要加 markdown code block）:
 {{
   "result": "一句話描述畫面內容",
   "confidence": 0.0到1.0的信心分數（若畫面模糊或無法判斷請給0.3以下）,
-  "tags": ["最多3個廢片標籤，例如：AI生成、畫質差、重複畫面、無字幕、純特效"]
+  "tags": ["最多3個廢片標籤，例如：AI生成、畫質差、重複畫面、搬運浮水印、螢幕錄製、純特效"]
 }}"""
 
 
 def run_vision_agent(state: SkipItState) -> dict:
-    # 1. 下載影片、截 n 張幀（downloader.py 內建快取，重複分析不會重下載/重截）
-    video_path = download_video(state["url"])
+    # 1. 優先用 graph 的 download 節點已下載好的影片；單獨執行時才自己下載
+    if state.get("video_path"):
+        video_path = Path(state["video_path"])
+    else:
+        video_path = download_video(state["url"])
     frames = extract_frames(video_path, n=FRAME_COUNT)
 
     # 2. 轉成 base64 data URL 給 GPT-4o；detail="low" 只是粗判廢片不需要高解析度，省 token

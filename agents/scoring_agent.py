@@ -1,6 +1,6 @@
 import json
 from openai import OpenAI
-from database import get_tag_dislike_count
+from database import get_tag_dislike_count, get_taste_profile
 from models import SkipItState
 from config import GPT_MODEL, OPENAI_API_KEY
 
@@ -15,17 +15,25 @@ Metadata 分析: {metadata_result} (信心: {meta_conf}, 標籤: {meta_tags})
 常見廢片標籤的累積不喜歡次數（越高越要扣分）:
 {tag_weights}
 
+【使用者個人品味檔案（由使用者回饋累積學習而來）】
+{taste_profile}
+請優先以他的個人標準評分，個人標準沒涵蓋的部分才用下面的通用標準。
+
 評分標準（1=極度廢片，10=高品質）:
 - 1-3: 廣告/推銷/AI生成/無任何資訊價值
 - 4-5: 純娛樂但重複或無新意
 - 6-7: 有一定娛樂或資訊價值
 - 8-10: 高品質、有深度或高度娛樂性
 
+注意：若三個分析結果彼此矛盾（例如畫面正常但語音是廣告話術），
+請在 summary 說明你採信哪一方及原因，並將 conflict 設為 true。
+
 回覆 JSON（不要加 markdown code block）:
 {{
   "score": 1到10的整數,
   "summary": "一句話說明評分理由（15字以內）",
-  "tags": ["最終廢片標籤列表，最多4個"]
+  "tags": ["最終廢片標籤列表，最多4個"],
+  "conflict": true或false
 }}"""
 
 
@@ -56,6 +64,7 @@ def run_scoring_agent(state: SkipItState) -> dict:
         audio_conf=audio.get("confidence", 0),
         audio_tags=", ".join(audio.get("tags") or []),
         tag_weights=tag_weight_str,
+        taste_profile=get_taste_profile(),
     )
 
     response = _client.chat.completions.create(

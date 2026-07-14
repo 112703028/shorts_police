@@ -37,6 +37,11 @@ def init_db(db_path: str = None) -> None:
                 dislike_count INTEGER DEFAULT 0,
                 updated_at    TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS taste_profile (
+                id         INTEGER PRIMARY KEY CHECK (id = 1),
+                content    TEXT,
+                updated_at TIMESTAMP
+            );
         """)
 
 
@@ -106,4 +111,56 @@ def increment_tag_dislike(tag: str, db_path: str = None) -> None:
             "INSERT INTO tag_preferences (tag, dislike_count, updated_at) VALUES (?,1,?) "
             "ON CONFLICT(tag) DO UPDATE SET dislike_count=dislike_count+1, updated_at=?",
             (tag, datetime.now(), datetime.now())
+        )
+
+
+DEFAULT_TASTE_PROFILE = """【使用者品味檔案】
+（尚無使用者回饋，使用預設標準）
+- 討厭：純廣告推銷、營銷號搬運內容、無資訊價值的 AI 生成影片
+- 一般標準：娛樂性和資訊價值至少要有一項"""
+
+
+def get_taste_profile(db_path: str = None) -> str:
+    # Scoring Agent 評分前讀取；Feedback Agent 學習時的修改基礎
+    with _conn(db_path) as conn:
+        row = conn.execute("SELECT content FROM taste_profile WHERE id = 1").fetchone()
+    return row[0] if row else DEFAULT_TASTE_PROFILE
+
+
+def save_taste_profile(content: str, db_path: str = None) -> None:
+    # Feedback Agent 重寫品味檔案後存回（全系統只有一份，UPSERT 到 id=1）
+    with _conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO taste_profile (id, content, updated_at) VALUES (1,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET content=?, updated_at=?",
+            (content, datetime.now(), content, datetime.now())
+        )
+
+
+def get_last_analysis(db_path: str = None) -> dict | None:
+    # 使用者回饋「這個不錯」時，「這個」指的就是最近一筆分析結果
+    with _conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT url, creator_id, score, summary, tags FROM analysis_history "
+            "ORDER BY analyzed_at DESC LIMIT 1"
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "url": row[0],
+        "creator_id": row[1],
+        "score": row[2],
+        "summary": row[3],
+        "tags": json.loads(row[4]) if row[4] else [],
+    }
+
+
+def set_creator_status(creator_id: str, status: str, db_path: str = None) -> None:
+    # Feedback Agent 依使用者指示直接改頻道狀態（例如「封鎖這個頻道」→ blacklist）
+    with _conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO creator_preferences (creator_id, status, avg_score, count, updated_at) "
+            "VALUES (?,?,0,0,?) "
+            "ON CONFLICT(creator_id) DO UPDATE SET status=?, updated_at=?",
+            (creator_id, status, datetime.now(), status, datetime.now())
         )

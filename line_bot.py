@@ -9,6 +9,7 @@ from linebot.v3.messaging import (
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from graph import run_pipeline
+from agents.feedback_agent import run_feedback_agent
 from config import LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN
 
 app = FastAPI()
@@ -77,7 +78,14 @@ async def webhook(
 def handle_message(event: MessageEvent):
     url = extract_youtube_url(event.message.text)
     if not url:
-        # 訊息裡沒有 YouTube Shorts 連結就忽略，不回覆
+        # 沒有連結 → 可能是對上次分析結果的回饋，交給 Feedback Agent 判斷
+        result = run_feedback_agent(event.message.text)
+        if result["is_feedback"]:
+            # 是回饋才回覆（附上學到的內容）；閒聊保持沉默不打擾群組
+            reply_text = result["reply"]
+            if result.get("learned"):
+                reply_text += f"\n🧠 學到：{result['learned']}"
+            _reply(event.reply_token, reply_text)
         return
     # 先立即回覆「分析中」，因為 reply_token 有時效性，完整分析要幾十秒跑不完
     _reply(event.reply_token, "🔍 分析中，請稍後...")
