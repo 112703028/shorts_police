@@ -1,61 +1,53 @@
 import json
 from openai import OpenAI
-from database import get_tag_dislike_count
-from models import SkipItState
+from models import AgentState
 from config import GPT_MODEL, OPENAI_API_KEY
 
 _client = OpenAI(api_key=OPENAI_API_KEY)
 
-SCORING_PROMPT = """你是一個影片廢片評分系統。根據以下三個分析結果，給出最終評分。
+SCORING_PROMPT = """你是一個影片評分系統，要根據以下分析結果和使用者的個人品味，給出評分。
 
-Metadata 分析: {metadata_result} (信心: {meta_conf}, 標籤: {meta_tags})
-畫面分析: {vision_result} (信心: {vision_conf}, 標籤: {vision_tags})
-語音分析: {audio_result} (信心: {audio_conf}, 標籤: {audio_tags})
+Metadata 訊號：{metadata_signals}
+畫面訊號：{vision_signals}
+語音訊號：{audio_signals}
 
-常見廢片標籤的累積不喜歡次數（越高越要扣分）:
-{tag_weights}
+使用者的品味檔案：
+{taste_profile}
 
-評分標準（1=極度廢片，10=高品質）:
-- 1-3: 廣告/推銷/AI生成/無任何資訊價值
-- 4-5: 純娛樂但重複或無新意
-- 6-7: 有一定娛樂或資訊價值
-- 8-10: 高品質、有深度或高度娛樂性
+若品味檔案裡的「例外規則」或「喜歡的頻道」跟這支影片相關，請依照例外規則調整判斷，不要死板套用一般標準。
+
+給出五個維度評分（每項 0-10，分數越高代表這個維度越沒問題/品質越好）：
+- ai_generated：內容不是 AI 生成的程度（10=確定不是AI生成，0=高度確定AI生成）
+- emotional_manipulation：沒有情緒操弄的程度（10=完全沒有雞湯/恐懼訴求話術，0=大量情緒操弄）
+- originality：原創度（10=高度原創，0=完全搬運/重複）
+- information_value：資訊價值（10=資訊密度高，0=毫無資訊價值）
+- visual_quality：畫面品質（10=製作精良，0=粗製濫造）
 
 回覆 JSON（不要加 markdown code block）:
 {{
-  "score": 1到10的整數,
-  "summary": "一句話說明評分理由（15字以內）",
-  "tags": ["最終廢片標籤列表，最多4個"]
-}}"""
+  "scores": {{"ai_generated": 0到10, "emotional_manipulation": 0到10, "originality": 0到10, "information_value": 0到10, "visual_quality": 0到10}},
+  "overall_score": 0到100的整數,
+  "verdict": "trash 或 review 或 keep",
+  "summary": "一句話說明理由（20字以內）",
+  "tags": ["最多4個標籤，例如：AI生成、雞湯、廣告、搬運"]
+}}
+
+verdict 判斷標準：overall_score < 40 是 trash，40-69 是 review，70 以上是 keep。"""
 
 
-def run_scoring_agent(state: SkipItState) -> dict:
-    # 1. 取出三個子 agent 的結果；audio_output 可能是 None（無語音時 Orchestrator 會跳過 Audio Agent）
-    meta = state["metadata_output"] or {}
-    vision = state["vision_output"] or {}
-    audio = state["audio_output"] or {}
+def run_scoring_agent(state: AgentState) -> dict:
+    # 1. 彙整三個 agent 的 signals；沒跑過的 agent（例如無語音跳過）signals 會是 None
+    metadata_signals = state.get("metadata_signals") or []
+    vision_signals = state.get("vision_signals") or []
+    audio_signals = state.get("audio_signals") or []
+    taste_profile = state.get("taste_profile") or "（尚無品味檔案）"
 
-    # 2. 彙整三方標籤，查詢每個標籤的歷史不喜歡次數（Preference Agent 累積的學習結果）
-    all_tags = list(set(
-        (meta.get("tags") or []) +
-        (vision.get("tags") or []) +
-        (audio.get("tags") or [])
-    ))
-    tag_weights = {tag: get_tag_dislike_count(tag) for tag in all_tags}
-    tag_weight_str = "\n".join(f"  {t}: {c}次" for t, c in tag_weights.items()) or "  無"
-
-    # 3. 組成 prompt 送給 GPT-4o；audio 沒有結果時用「無語音」代替，讓 prompt 依然合理
+    # 2. 組成 prompt，把 taste_profile 放進去做個人化評分
     prompt = SCORING_PROMPT.format(
-        metadata_result=meta.get("result", "無"),
-        meta_conf=meta.get("confidence", 0),
-        meta_tags=", ".join(meta.get("tags") or []),
-        vision_result=vision.get("result", "無"),
-        vision_conf=vision.get("confidence", 0),
-        vision_tags=", ".join(vision.get("tags") or []),
-        audio_result=audio.get("result", "無語音"),
-        audio_conf=audio.get("confidence", 0),
-        audio_tags=", ".join(audio.get("tags") or []),
-        tag_weights=tag_weight_str,
+        metadata_signals="、".join(metadata_signals) or "無",
+        vision_signals="、".join(vision_signals) or "無",
+        audio_signals="、".join(audio_signals) or "無語音",
+        taste_profile=taste_profile,
     )
 
     response = _client.chat.completions.create(
@@ -65,9 +57,15 @@ def run_scoring_agent(state: SkipItState) -> dict:
     )
     parsed = json.loads(response.choices[0].message.content)
 
-    # 4. 強制夾在 1-10 範圍，避免 GPT 偶爾回覆超出範圍的分數
+    # 3. verdict 強制限定在三個合法值內，GPT 偶爾亂回時 fallback 到 review
+    verdict = parsed.get("verdict")
+    if verdict not in ("trash", "review", "keep"):
+        verdict = "review"
+
     return {
-        "score": max(1, min(10, int(parsed.get("score", 5)))),
+        "scores": parsed.get("scores", {}),
+        "overall_score": max(0, min(100, int(parsed.get("overall_score", 50)))),
+        "verdict": verdict,
         "summary": parsed.get("summary", ""),
         "tags": parsed.get("tags", []),
     }

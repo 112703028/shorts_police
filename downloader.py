@@ -2,7 +2,7 @@ import subprocess
 import hashlib
 from pathlib import Path
 import yt_dlp
-from config import TMP_DIR, FRAME_COUNT
+from config import TMP_DIR
 
 
 def _video_id(url: str) -> str:
@@ -16,10 +16,8 @@ def download_video(url: str) -> Path:
     vid_id = _video_id(url)
     out_path = out_dir / f"{vid_id}.mp4"
     if out_path.exists():
-        # 已經下載過，直接回傳快取的檔案
         return out_path
     opts = {
-        # 優先抓 mp4 格式的影音軌並合併，抓不到才 fallback 到任何可用格式
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "outtmpl": str(out_path),
         "quiet": True,
@@ -30,32 +28,18 @@ def download_video(url: str) -> Path:
     return out_path
 
 
-def extract_frames(video_path: Path, n: int = FRAME_COUNT) -> list[Path]:
+def extract_frames(video_path: Path) -> list[Path]:
+    # 每秒抽一幀（不是固定張數），密度隨影片長度變動
     out_dir = video_path.parent / f"{video_path.stem}_frames"
     out_dir.mkdir(exist_ok=True)
-    frames = sorted(out_dir.glob("frame_*.jpg"))
-    if len(frames) == n:
-        # 之前已經截過同樣數量的幀，直接重用
-        return frames
-    # 用 ffprobe 讀取影片總長度（秒）
-    result = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
-        capture_output=True, text=True
-    )
-    duration = float(result.stdout.strip())
-    # 把影片均勻切成 n+1 段，取 n 個切點截圖，避免只截到開頭或結尾
-    interval = duration / (n + 1)
-    frame_paths = []
-    for i in range(1, n + 1):
-        ts = interval * i
-        out_file = out_dir / f"frame_{i:02d}.jpg"
-        subprocess.run([
-            "ffmpeg", "-ss", str(ts), "-i", str(video_path),
-            "-frames:v", "1", "-q:v", "2", str(out_file), "-y", "-loglevel", "error"
-        ], check=True)
-        frame_paths.append(out_file)
-    return frame_paths
+    existing = sorted(out_dir.glob("frame_*.jpg"))
+    if existing:
+        return existing
+    subprocess.run([
+        "ffmpeg", "-i", str(video_path), "-vf", "fps=1",
+        str(out_dir / "frame_%03d.jpg"), "-y", "-loglevel", "error"
+    ], check=True)
+    return sorted(out_dir.glob("frame_*.jpg"))
 
 
 def extract_audio(video_path: Path) -> Path:
