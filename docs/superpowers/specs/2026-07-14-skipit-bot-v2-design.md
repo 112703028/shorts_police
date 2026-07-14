@@ -216,11 +216,17 @@ class AgentState(TypedDict):
 
 ## 檔案結構
 
+維持跟 v1 / `main` 一樣的**扁平結構**，不分子資料夾——之後要跟 main 整合時，檔案路徑對得上，git 才能做正常的逐行比對，不會變成整批「刪除舊路徑+新增新路徑」：
+
 ```
 skipit_bot/
 ├── config.py
 ├── models.py               # AgentState TypedDict
 ├── downloader.py           # yt-dlp 下載 + ffmpeg 截幀/抽音軌（共用）
+├── database.py             # SQLite：taste_profile 表
+├── graph.py                # LangGraph 組裝
+├── line_bot.py             # FastAPI webhook
+├── main.py                 # 啟動入口
 ├── agents/
 │   ├── __init__.py
 │   ├── orchestrator.py
@@ -229,12 +235,6 @@ skipit_bot/
 │   ├── audio_agent.py      # Whisper + NLP
 │   ├── scoring_agent.py    # 五維評分 + verdict
 │   └── preference_agent.py # taste_profile 讀寫
-├── graph/
-│   └── pipeline.py         # LangGraph 組裝
-├── bot/
-│   └── line_bot.py         # FastAPI webhook
-├── db/
-│   └── database.py         # SQLite：taste_profile 表
 ├── data/                   # SQLite DB（gitignored）
 ├── tmp/                    # 下載暫存（gitignored）
 └── tests/
