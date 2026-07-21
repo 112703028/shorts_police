@@ -22,7 +22,9 @@ _analysis_semaphore = threading.Semaphore(MAX_CONCURRENT_ANALYSES)
 # process 內的暫存狀態（重啟就清空，demo 規模夠用，之後有需要再搬進 DB）：
 # 等問卷回覆的使用者 -> 他原本要分析的連結
 _pending_onboarding: dict[str, str] = {}
-# 等 👍/👎 回饋的使用者 -> 上一次判定結果（preference_agent 需要 tags 才能學習）
+# 等 👍/👎 回饋的「聊天室」(target_id) -> 最近一次判定結果（tags）
+# 用 target_id 而非 user_id 當 key，讓群組裡任何人都能對同一次判定回饋，不侷限貼連結的那個人；
+# 每個人回饋時各自用自己的 user_id 查/寫 taste_profile，維持 per-user 個人化。
 _pending_feedback: dict[str, dict] = {}
 
 YT_SHORTS_PATTERN = re.compile(
@@ -98,8 +100,8 @@ def _run_analysis(user_id: str, target_id: str, url: str) -> None:
     except Exception as e:
         _push(target_id, f"❌ 分析失敗：{str(e)[:100]}")
         return
-    # 記住這次判定，等使用者回覆 👍/👎 時才知道要把哪些 tags 餵給 preference_agent
-    _pending_feedback[user_id] = {
+    # 記住這次判定，等聊天室裡任何人回覆 👍/👎 時都知道要把哪些 tags 餵給 preference_agent
+    _pending_feedback[target_id] = {
         "tags": result.get("tags") or [],
     }
     text = format_reply(
@@ -149,9 +151,10 @@ def handle_message(event: MessageEvent):
         threading.Thread(target=_onboard_then_analyze, daemon=True).start()
         return
 
-    if user_id in _pending_feedback:
-        # 這則訊息是判定後的 👍/👎（或文字說明），送進 preference_agent 更新 taste_profile
-        pending = _pending_feedback.pop(user_id)
+    if target_id in _pending_feedback:
+        # 這則訊息是判定後的 👍/👎（或文字說明）。不 pop：讓聊天室裡每個人都能對同一次判定
+        # 各自回饋，各自更新自己的 taste_profile（回饋人 = 這則訊息的 user_id，不一定是貼連結的人）
+        pending = _pending_feedback[target_id]
         existing_profile = get_taste_profile(user_id) or ""
         threading.Thread(
             target=run_preference_agent,
