@@ -5,7 +5,7 @@ from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi,
-    ReplyMessageRequest, TextMessage,
+    ReplyMessageRequest, PushMessageRequest, TextMessage,
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from graph import run_pipeline
@@ -25,7 +25,12 @@ _pending_onboarding: dict[str, str] = {}
 # 等 👍/👎 回饋的「聊天室」(target_id) -> 最近一次判定結果（tags/creator_id/creator_name）
 # 用 target_id 而非 user_id 當 key，讓群組裡任何人都能對同一次判定回饋，不侷限貼連結的那個人；
 # 每個人回饋時各自用自己的 user_id 查/寫 taste_profile，維持 per-user 個人化。
+# 這是「沒有引用回覆」時的 fallback：把回饋當作針對聊天室最新一次判定。
 _pending_feedback: dict[str, dict] = {}
+# 判定訊息的 message_id -> 該次判定結果。使用者「引用回覆」某則判定訊息時，
+# 用 quoted_message_id 精準對應到那一支影片，不受後續又分析了幾支影響。
+# process 內暫存（重啟清空，demo 規模夠用）。
+_verdict_by_message: dict[str, dict] = {}
 
 YT_SHORTS_PATTERN = re.compile(
     r"https?://(?:www\.)?youtube\.com/shorts/[\w-]+"
@@ -68,10 +73,15 @@ def _reply(reply_token: str, text: str) -> None:
         )
 
 
-def _push(target_id: str, text: str) -> None:
-    # reply_token 已經用掉（或這則訊息不是回覆某個 webhook 事件），改用 push_message 主動推播
+def _push(target_id: str, text: str) -> str | None:
+    # reply_token 已經用掉（或這則訊息不是回覆某個 webhook 事件），改用 push_message 主動推播。
+    # 回傳這則訊息的 message_id，讓呼叫端可以建立 message_id -> 判定結果 的對照（供引用回覆查詢）。
     with ApiClient(_config) as api_client:
-        MessagingApi(api_client).push_message(to=target_id, messages=[TextMessage(text=text)])
+        resp = MessagingApi(api_client).push_message(
+            PushMessageRequest(to=target_id, messages=[TextMessage(text=text)])
+        )
+    sent = getattr(resp, "sent_messages", None)
+    return sent[0].id if sent else None
 
 
 @app.get("/health")
@@ -101,17 +111,21 @@ def _run_analysis(user_id: str, target_id: str, url: str) -> None:
         _push(target_id, f"❌ 分析失敗：{str(e)[:100]}")
         return
     # 記住這次判定，等聊天室裡任何人回覆 👍/👎 時都知道要把哪些 tags/頻道餵給 preference_agent
-    _pending_feedback[target_id] = {
+    pending = {
         "tags": result.get("tags") or [],
         "creator_id": result.get("creator_id"),
         "creator_name": result.get("creator_name"),
     }
+    _pending_feedback[target_id] = pending  # fallback：沒引用時當作針對最新一次判定
     text = format_reply(
         overall_score=result.get("overall_score", 0),
         verdict=result.get("verdict", "review"),
         summary=result.get("summary", ""),
     )
-    _push(target_id, text)
+    message_id = _push(target_id, text)
+    # 建立 message_id -> 這次判定 的對照，讓使用者可以引用回覆這則訊息、精準對應這一支影片
+    if message_id:
+        _verdict_by_message[message_id] = pending
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
@@ -153,14 +167,23 @@ def handle_message(event: MessageEvent):
         threading.Thread(target=_onboard_then_analyze, daemon=True).start()
         return
 
-    if target_id in _pending_feedback:
-        # 這則訊息是判定後的 👍/👎（或文字說明）。不 pop：讓聊天室裡每個人都能對同一次判定
-        # 各自回饋，各自更新自己的 taste_profile（回饋人 = 這則訊息的 user_id，不一定是貼連結的人）；
-        # 使用者若提到「封鎖這頻道」，一律指這次判定的頻道，不做模糊比對
+    # 判定回饋分支：優先看有沒有「引用回覆」某則特定判定訊息，其次才用聊天室最新一次判定
+    quoted_id = getattr(event.message, "quoted_message_id", None)
+    if quoted_id and quoted_id in _verdict_by_message:
+        # 使用者引用回覆了某則判定訊息 → 精準對應那一支影片，不受後續又分析了幾支影響
+        pending = _verdict_by_message[quoted_id]
+    elif target_id in _pending_feedback:
+        # 沒引用 → 當作針對聊天室最近一次判定
         pending = _pending_feedback[target_id]
+    else:
+        pending = None
+
+    if pending is not None:
+        # 回饋人 = 這則訊息的 user_id（不一定是貼連結的人），各自更新自己的 taste_profile；
+        # 使用者若提到「封鎖這頻道」，一律指這次判定的頻道，不做模糊比對
         existing_profile = get_taste_profile(user_id) or ""
 
-        def _handle_feedback():
+        def _handle_feedback(pending=pending):
             result = run_preference_agent({
                 "user_id": user_id, "taste_profile": existing_profile,
                 "user_feedback": text, "tags": pending["tags"],
