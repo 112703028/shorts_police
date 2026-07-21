@@ -34,11 +34,19 @@ def init_db(db_path: str = None) -> None:
                 user_id       TEXT,
                 url           TEXT,
                 creator_id    TEXT,
+                creator_name  TEXT,
                 verdict       TEXT,
                 overall_score INTEGER,
                 summary       TEXT,
                 tags          TEXT,
                 analyzed_at   TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS blacklist (
+                user_id     TEXT,
+                creator_id  TEXT,
+                reason      TEXT,
+                created_at  TIMESTAMP,
+                PRIMARY KEY (user_id, creator_id)
             );
         """)
 
@@ -63,12 +71,13 @@ def save_taste_profile(user_id: str, profile: str, db_path: str = None) -> None:
 
 
 def record_analysis(user_id: str, url: str, creator_id: str, verdict: str,
-                     overall_score: int, summary: str, tags: list[str], db_path: str = None) -> None:
+                     overall_score: int, summary: str, tags: list[str],
+                     creator_name: str = None, db_path: str = None) -> None:
     with _conn(db_path) as conn:
         conn.execute(
-            "INSERT INTO analysis_history (user_id, url, creator_id, verdict, overall_score, summary, tags, analyzed_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (user_id, url, creator_id, verdict, overall_score, summary,
+            "INSERT INTO analysis_history (user_id, url, creator_id, creator_name, verdict, overall_score, summary, tags, analyzed_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (user_id, url, creator_id, creator_name, verdict, overall_score, summary,
              json.dumps(tags, ensure_ascii=False), datetime.now())
         )
 
@@ -87,3 +96,42 @@ def count_consecutive_trash(user_id: str, creator_id: str, db_path: str = None) 
             break
         count += 1
     return count
+
+
+def is_blacklisted(user_id: str, creator_id: str, db_path: str = None) -> bool:
+    # Orchestrator 早停查詢的唯一權威來源：單一 SQL WHERE，不碰 LLM，成本幾乎是零
+    with _conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM blacklist WHERE user_id = ? AND creator_id = ?",
+            (user_id, creator_id)
+        ).fetchone()
+    return row is not None
+
+
+def add_to_blacklist(user_id: str, creator_id: str, reason: str, db_path: str = None) -> None:
+    # reason 區分是使用者明確指示，還是 count_consecutive_trash 觸發的隱性偵測
+    with _conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO blacklist (user_id, creator_id, reason, created_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(user_id, creator_id) DO UPDATE SET reason=excluded.reason, created_at=excluded.created_at",
+            (user_id, creator_id, reason, datetime.now())
+        )
+
+
+def remove_from_blacklist(user_id: str, creator_id: str, db_path: str = None) -> None:
+    # 使用者事後說「這頻道其實還好」時解封
+    with _conn(db_path) as conn:
+        conn.execute(
+            "DELETE FROM blacklist WHERE user_id = ? AND creator_id = ?",
+            (user_id, creator_id)
+        )
+
+
+def list_blacklist(user_id: str, db_path: str = None) -> list[str]:
+    # 給展示/敘事用：組完整品味檔案顯示時，即時從 SQL 撈黑名單清單接在後面
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT creator_id FROM blacklist WHERE user_id = ? ORDER BY created_at",
+            (user_id,)
+        ).fetchall()
+    return [r[0] for r in rows]

@@ -98,9 +98,11 @@ def _run_analysis(user_id: str, target_id: str, url: str) -> None:
     except Exception as e:
         _push(target_id, f"❌ 分析失敗：{str(e)[:100]}")
         return
-    # 記住這次判定，等使用者回覆 👍/👎 時才知道要把哪些 tags 餵給 preference_agent
+    # 記住這次判定，等使用者回覆 👍/👎 時才知道要把哪些 tags/頻道餵給 preference_agent
     _pending_feedback[user_id] = {
         "tags": result.get("tags") or [],
+        "creator_id": result.get("creator_id"),
+        "creator_name": result.get("creator_name"),
     }
     text = format_reply(
         overall_score=result.get("overall_score", 0),
@@ -150,17 +152,22 @@ def handle_message(event: MessageEvent):
         return
 
     if user_id in _pending_feedback:
-        # 這則訊息是判定後的 👍/👎（或文字說明），送進 preference_agent 更新 taste_profile
+        # 這則訊息是判定後的 👍/👎（或文字說明），送進 preference_agent 更新 taste_profile；
+        # 使用者若提到「封鎖這頻道」，一律指剛剛那支影片的頻道，不做模糊比對
         pending = _pending_feedback.pop(user_id)
         existing_profile = get_taste_profile(user_id) or ""
-        threading.Thread(
-            target=run_preference_agent,
-            args=({
+
+        def _handle_feedback():
+            result = run_preference_agent({
                 "user_id": user_id, "taste_profile": existing_profile,
                 "user_feedback": text, "tags": pending["tags"],
-            },),
-            daemon=True,
-        ).start()
+                "creator_id": pending.get("creator_id"),
+                "creator_name": pending.get("creator_name"),
+            })
+            if result.get("reply_note"):
+                _push(target_id, result["reply_note"])
+
+        threading.Thread(target=_handle_feedback, daemon=True).start()
         return
 
     # 其他訊息（沒連結、沒在等問卷/回饋）就忽略，不回覆

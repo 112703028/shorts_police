@@ -5,6 +5,7 @@ class AgentState(TypedDict):
     user_id: str
     url: str
     creator_id: Optional[str]
+    creator_name: Optional[str]
     video_path: Optional[str]
     frames: Optional[list[str]]
     transcript: Optional[str]

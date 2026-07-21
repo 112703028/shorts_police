@@ -1,7 +1,8 @@
 import json
+from datetime import datetime
 import yt_dlp
 from openai import OpenAI
-from models import AgentOutput, SkipItState
+from models import AgentState
 from config import GPT_MODEL, OPENAI_API_KEY
 
 _client = OpenAI(api_key=OPENAI_API_KEY)
@@ -26,8 +27,8 @@ METADATA_PROMPT = """你是一個專門識別「廢片」與「營銷號」的�
 {post_frequency}
 
 ---
-請根據以下「營銷號」特徵進行判斷：
-1. 盜用內容 — 搬運他人影片（無法從 metadata 直接判斷，但可從標題看出）
+請根據以下「營銷號」特徵找出所有問題訊號：
+1. 盜用內容 — 標題暗示搬運他人影片
 2. 捏造/誇大 — 標題使用「震驚」「不敢相信」「內幕」「曝光」「陰謀論」等煽情用語
 3. 內容農場 — 頻道同時發政治、娛樂、生活等完全不相關的主題
 4. 批量發片 — 一天多支，主題雷同或隨機
@@ -36,13 +37,9 @@ METADATA_PROMPT = """你是一個專門識別「廢片」與「營銷號」的�
 
 回覆以下 JSON 格式（不要加 markdown code block）:
 {{
-  "result": "一句話描述這支影片的內容類型",
-  "confidence": 0.0到1.0的信心分數,
-  "tags": ["最多4個標籤，例如：營銷號、內容農場、標題黨、買流量、盜用內容、廣告導流、AI生成、重複內容"],
-  "channel_pattern": "一句話描述這個頻道的發片慣性",
-  "is_spam_channel": true或false
+  "signals": ["每個訊號一句話描述，例如：按讚率0.3%疑似買流量、頻道主題橫跨政治娛樂疑似內容農場、標題使用震驚等煽情用語"]
 }}
-若無廢片或營銷號特徵，tags 回空陣列，is_spam_channel 回 false。"""
+若沒有發現任何問題，signals 回空陣列。"""
 
 
 def _get_recent_channel_info(channel_id: str, n: int = 8) -> tuple[list[str], str]:
@@ -60,10 +57,8 @@ def _get_recent_channel_info(channel_id: str, n: int = 8) -> tuple[list[str], st
         entries = info.get("entries") or []
         titles = [e.get("title", "") for e in entries]
 
-        # 計算發片頻率（從日期推算）
         dates = [e.get("upload_date", "") for e in entries if e.get("upload_date")]
         if len(dates) >= 2:
-            from datetime import datetime
             parsed_dates = [datetime.strptime(d, "%Y%m%d") for d in dates if len(d) == 8]
             if len(parsed_dates) >= 2:
                 days_span = (parsed_dates[0] - parsed_dates[-1]).days or 1
@@ -79,8 +74,8 @@ def _get_recent_channel_info(channel_id: str, n: int = 8) -> tuple[list[str], st
         return [], "無法取得"
 
 
-def run_metadata_agent(state: SkipItState) -> dict:
-    # 1. 抓這支影片的 metadata
+def run_metadata_agent(state: AgentState) -> dict:
+    # 1. 抓這支影片的 metadata（不下載影片本體）
     opts = {"skip_download": True, "quiet": True}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(state["url"], download=False)
@@ -92,7 +87,7 @@ def run_metadata_agent(state: SkipItState) -> dict:
     description = info.get("description") or ""
     has_link = "是" if "http" in description else "否"
 
-    # 2. 抓頻道最近影片 + 發片頻率
+    # 2. 抓頻道最近影片 + 發片頻率，判斷主題一致性/批量發片
     recent_titles, post_frequency = _get_recent_channel_info(channel_id)
     recent_titles_str = "\n".join(f"- {t}" for t in recent_titles) if recent_titles else "（無法取得）"
 
@@ -118,17 +113,8 @@ def run_metadata_agent(state: SkipItState) -> dict:
     )
     parsed = json.loads(response.choices[0].message.content)
 
-    output: AgentOutput = {
-        "agent": "metadata",
-        "result": parsed.get("result", ""),
-        "confidence": float(parsed.get("confidence", 0.5)),
-        "tags": parsed.get("tags", []),
-        "channel_pattern": parsed.get("channel_pattern", ""),
-        "is_spam_channel": parsed.get("is_spam_channel", False),
-    }
-
     return {
-        "metadata_output": output,
+        "metadata_signals": parsed.get("signals", []),
         "creator_id": channel_id,
         "creator_name": info.get("uploader", ""),
     }
@@ -136,10 +122,5 @@ def run_metadata_agent(state: SkipItState) -> dict:
 
 if __name__ == "__main__":
     result = run_metadata_agent({"url": "https://www.youtube.com/shorts/okFg7q3wjVA"})
-    out = result["metadata_output"]
-    print("頻道:", result["creator_name"])
-    print("分析:", out["result"])
-    print("信心:", out["confidence"])
-    print("標籤:", out["tags"])
-    print("頻道慣性:", out.get("channel_pattern", ""))
-    print("是否營銷號:", out.get("is_spam_channel", False))
+    print("頻道:", result["creator_name"], f"({result['creator_id']})")
+    print("metadata_signals:", result["metadata_signals"])
