@@ -33,15 +33,16 @@ def test_count_consecutive_trash_zero_when_no_history():
 
 
 def test_count_consecutive_trash_counts_streak():
-    record_analysis("U1", "https://yt.be/1", "UCabc", "trash", 2, "廢片", [], TEST_DB)
-    record_analysis("U1", "https://yt.be/2", "UCabc", "trash", 3, "廢片", [], TEST_DB)
-    record_analysis("U1", "https://yt.be/3", "UCabc", "trash", 1, "廢片", [], TEST_DB)
+    # db_path 一律用關鍵字傳，避免 record_analysis 之後加新參數時位置錯位、悄悄寫進正式 DB
+    record_analysis("U1", "https://yt.be/1", "UCabc", "trash", 2, "廢片", [], db_path=TEST_DB)
+    record_analysis("U1", "https://yt.be/2", "UCabc", "trash", 3, "廢片", [], db_path=TEST_DB)
+    record_analysis("U1", "https://yt.be/3", "UCabc", "trash", 1, "廢片", [], db_path=TEST_DB)
     assert count_consecutive_trash("U1", "UCabc", TEST_DB) == 3
 
 
 def test_count_consecutive_trash_stops_at_non_trash():
-    record_analysis("U1", "https://yt.be/1", "UCabc", "trash", 2, "廢片", [], TEST_DB)
-    record_analysis("U1", "https://yt.be/2", "UCabc", "keep", 8, "不錯", [], TEST_DB)
-    record_analysis("U1", "https://yt.be/3", "UCabc", "trash", 2, "廢片", [], TEST_DB)
+    record_analysis("U1", "https://yt.be/1", "UCabc", "trash", 2, "廢片", [], db_path=TEST_DB)
+    record_analysis("U1", "https://yt.be/2", "UCabc", "keep", 8, "不錯", [], db_path=TEST_DB)
+    record_analysis("U1", "https://yt.be/3", "UCabc", "trash", 2, "廢片", [], db_path=TEST_DB)
     # 最新兩支的順序：keep 之後又一支 trash -> 只算最新的連續段
     assert count_consecutive_trash("U1", "UCabc", TEST_DB) == 1

@@ -29,6 +29,14 @@ def download_video(url: str) -> Path:
     return out_path
 
 
+def get_thumbnail_url(url: str) -> str | None:
+    # 抓 YouTube 官方縮圖網址（不下載影片本體），給 vision_agent 比對「縮圖與內容不符」用
+    opts = {"skip_download": True, "quiet": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    return info.get("thumbnail")
+
+
 def extract_frames(video_path: Path) -> list[Path]:
     # 每秒抽一幀（不是固定張數），密度隨影片長度變動
     out_dir = video_path.parent / f"{video_path.stem}_frames"
