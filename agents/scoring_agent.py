@@ -26,13 +26,36 @@ Metadata 訊號：{metadata_signals}
 回覆 JSON（不要加 markdown code block）:
 {{
   "scores": {{"ai_generated": 0到10, "emotional_manipulation": 0到10, "originality": 0到10, "information_value": 0到10, "visual_quality": 0到10}},
-  "overall_score": 0到100的整數,
-  "verdict": "trash 或 review 或 keep",
   "summary": "一句話說明理由（20字以內）",
-  "tags": ["最多4個標籤，例如：AI生成、雞湯、廣告、搬運"]
+  "tags": ["<最多4個標籤，只能從上面提供的 metadata/畫面/語音訊號裡歸納出來，不要憑空套用常見標籤>"]
 }}
 
-verdict 判斷標準：overall_score < 40 是 trash，40-69 是 review，70 以上是 keep。"""
+tags 必須對應到上面實際列出的訊號，如果沒有訊號支持某個標籤就不要加。"""
+
+# overall_score 跟 verdict 都不讓 LLM 自己回傳，改由程式碼從五個維度算出來，
+# 保證數字之間永遠邏輯一致：
+#   overall_score = 五個維度 0-10 分的平均 × 10（每個維度權重相同）
+#   verdict：overall_score < 40 是 trash，40-69 是 review，70 以上是 keep
+
+DIMENSIONS = ["ai_generated", "emotional_manipulation", "originality", "information_value", "visual_quality"]
+
+
+def _clamp_scores(raw_scores: dict) -> dict:
+    # 缺欄位預設 5（中性）、超出 0-10 範圍就夾住，避免單一離譜數字拉歪 overall_score
+    return {dim: max(0, min(10, int(raw_scores.get(dim, 5)))) for dim in DIMENSIONS}
+
+
+def _overall_score_from_dimensions(scores: dict) -> int:
+    avg = sum(scores.values()) / len(scores)
+    return max(0, min(100, round(avg * 10)))
+
+
+def _verdict_from_score(overall_score: int) -> str:
+    if overall_score < 40:
+        return "trash"
+    if overall_score < 70:
+        return "review"
+    return "keep"
 
 
 def run_scoring_agent(state: AgentState) -> dict:
@@ -57,15 +80,14 @@ def run_scoring_agent(state: AgentState) -> dict:
     )
     parsed = json.loads(response.choices[0].message.content)
 
-    # 3. verdict 強制限定在三個合法值內，GPT 偶爾亂回時 fallback 到 review
-    verdict = parsed.get("verdict")
-    if verdict not in ("trash", "review", "keep"):
-        verdict = "review"
+    # 3. 五個維度先夾範圍，overall_score/verdict 全部從這五個數字算出來，不再信任 LLM 自己回報的總分
+    scores = _clamp_scores(parsed.get("scores", {}))
+    overall_score = _overall_score_from_dimensions(scores)
 
     return {
-        "scores": parsed.get("scores", {}),
-        "overall_score": max(0, min(100, int(parsed.get("overall_score", 50)))),
-        "verdict": verdict,
+        "scores": scores,
+        "overall_score": overall_score,
+        "verdict": _verdict_from_score(overall_score),
         "summary": parsed.get("summary", ""),
         "tags": parsed.get("tags", []),
     }
