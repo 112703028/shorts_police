@@ -28,7 +28,9 @@ MOCK_GPT = '{"signals": []}'
 
 
 def test_metadata_agent_returns_creator_id():
-    with patch("agents.metadata_agent.yt_dlp.YoutubeDL") as mock_ydl, \
+    with patch("agents.metadata_agent.load_signal_cache", return_value=None), \
+         patch("agents.metadata_agent.save_signal_cache"), \
+         patch("agents.metadata_agent.yt_dlp.YoutubeDL") as mock_ydl, \
          patch("agents.metadata_agent._client") as mock_client:
         mock_ydl.return_value.__enter__.return_value.extract_info.return_value = MOCK_INFO
         mock_client.chat.completions.create.return_value.choices[0].message.content = MOCK_GPT
@@ -37,7 +39,9 @@ def test_metadata_agent_returns_creator_id():
 
 
 def test_metadata_agent_returns_creator_name():
-    with patch("agents.metadata_agent.yt_dlp.YoutubeDL") as mock_ydl, \
+    with patch("agents.metadata_agent.load_signal_cache", return_value=None), \
+         patch("agents.metadata_agent.save_signal_cache"), \
+         patch("agents.metadata_agent.yt_dlp.YoutubeDL") as mock_ydl, \
          patch("agents.metadata_agent._client") as mock_client:
         mock_ydl.return_value.__enter__.return_value.extract_info.return_value = MOCK_INFO
         mock_client.chat.completions.create.return_value.choices[0].message.content = MOCK_GPT
@@ -47,7 +51,9 @@ def test_metadata_agent_returns_creator_name():
 
 def test_metadata_agent_returns_signals_list():
     signals_response = '{"signals": ["按讚率0.3%疑似買流量", "標題使用震驚等煽情用語"]}'
-    with patch("agents.metadata_agent.yt_dlp.YoutubeDL") as mock_ydl, \
+    with patch("agents.metadata_agent.load_signal_cache", return_value=None), \
+         patch("agents.metadata_agent.save_signal_cache"), \
+         patch("agents.metadata_agent.yt_dlp.YoutubeDL") as mock_ydl, \
          patch("agents.metadata_agent._client") as mock_client:
         mock_ydl.return_value.__enter__.return_value.extract_info.return_value = MOCK_INFO
         mock_client.chat.completions.create.return_value.choices[0].message.content = signals_response
@@ -56,7 +62,9 @@ def test_metadata_agent_returns_signals_list():
 
 
 def test_metadata_agent_empty_signals_when_clean():
-    with patch("agents.metadata_agent.yt_dlp.YoutubeDL") as mock_ydl, \
+    with patch("agents.metadata_agent.load_signal_cache", return_value=None), \
+         patch("agents.metadata_agent.save_signal_cache"), \
+         patch("agents.metadata_agent.yt_dlp.YoutubeDL") as mock_ydl, \
          patch("agents.metadata_agent._client") as mock_client:
         mock_ydl.return_value.__enter__.return_value.extract_info.return_value = MOCK_INFO
         mock_client.chat.completions.create.return_value.choices[0].message.content = MOCK_GPT

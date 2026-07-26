@@ -21,7 +21,9 @@ def test_vision_agent_returns_signals():
     mock_frame = MagicMock(spec=Path)
     mock_frame.read_bytes.return_value = b"fake_image_bytes"
 
-    with patch("agents.vision_agent.download_video", return_value=Path("tmp/test.mp4")), \
+    with patch("agents.vision_agent.load_signal_cache", return_value=None), \
+         patch("agents.vision_agent.save_signal_cache"), \
+         patch("agents.vision_agent.download_video", return_value=Path("tmp/test.mp4")), \
          patch("agents.vision_agent.extract_frames", return_value=[mock_frame] * 10), \
          patch("agents.vision_agent._fetch_thumbnail_bytes", return_value=b"fake_thumbnail"), \
          patch("agents.vision_agent._client") as mock_client:
@@ -37,7 +39,9 @@ def test_vision_agent_no_signals_when_clean():
     mock_frame.read_bytes.return_value = b"fake"
     clean_response = '{"signals": []}'
 
-    with patch("agents.vision_agent.download_video", return_value=Path("tmp/test.mp4")), \
+    with patch("agents.vision_agent.load_signal_cache", return_value=None), \
+         patch("agents.vision_agent.save_signal_cache"), \
+         patch("agents.vision_agent.download_video", return_value=Path("tmp/test.mp4")), \
          patch("agents.vision_agent.extract_frames", return_value=[mock_frame] * 5), \
          patch("agents.vision_agent._fetch_thumbnail_bytes", return_value=b"fake_thumbnail"), \
          patch("agents.vision_agent._client") as mock_client:
@@ -52,7 +56,9 @@ def test_vision_agent_includes_thumbnail_image_when_available():
     mock_frame.read_bytes.return_value = b"fake_frame"
     clean_response = '{"signals": []}'
 
-    with patch("agents.vision_agent.download_video", return_value=Path("tmp/test.mp4")), \
+    with patch("agents.vision_agent.load_signal_cache", return_value=None), \
+         patch("agents.vision_agent.save_signal_cache"), \
+         patch("agents.vision_agent.download_video", return_value=Path("tmp/test.mp4")), \
          patch("agents.vision_agent.extract_frames", return_value=[mock_frame] * 3), \
          patch("agents.vision_agent._fetch_thumbnail_bytes", return_value=b"fake_thumbnail_bytes"), \
          patch("agents.vision_agent._client") as mock_client:
@@ -70,7 +76,9 @@ def test_vision_agent_falls_back_when_no_thumbnail():
     mock_frame.read_bytes.return_value = b"fake_frame"
     clean_response = '{"signals": []}'
 
-    with patch("agents.vision_agent.download_video", return_value=Path("tmp/test.mp4")), \
+    with patch("agents.vision_agent.load_signal_cache", return_value=None), \
+         patch("agents.vision_agent.save_signal_cache"), \
+         patch("agents.vision_agent.download_video", return_value=Path("tmp/test.mp4")), \
          patch("agents.vision_agent.extract_frames", return_value=[mock_frame] * 3), \
          patch("agents.vision_agent._fetch_thumbnail_bytes", return_value=None), \
          patch("agents.vision_agent._client") as mock_client:

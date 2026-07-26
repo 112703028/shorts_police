@@ -25,7 +25,9 @@ def _mock_response(content: str) -> MagicMock:
 
 
 def test_audio_agent_returns_signals():
-    with patch("agents.audio_agent.extract_audio", return_value=Path("tmp/test.mp3")), \
+    with patch("agents.audio_agent.load_signal_cache", return_value=None), \
+         patch("agents.audio_agent.save_signal_cache"), \
+         patch("agents.audio_agent.extract_audio", return_value=Path("tmp/test.mp3")), \
          patch("builtins.open", mock_open(read_data=b"fake_audio")), \
          patch("agents.audio_agent._client") as mock_client:
         mock_client.audio.transcriptions.create.return_value.text = MOCK_TRANSCRIPT
@@ -37,7 +39,9 @@ def test_audio_agent_returns_signals():
 
 
 def test_audio_agent_short_circuits_on_no_speech():
-    with patch("agents.audio_agent.extract_audio", return_value=Path("tmp/test.mp3")), \
+    with patch("agents.audio_agent.load_signal_cache", return_value=None), \
+         patch("agents.audio_agent.save_signal_cache"), \
+         patch("agents.audio_agent.extract_audio", return_value=Path("tmp/test.mp3")), \
          patch("builtins.open", mock_open(read_data=b"fake_audio")), \
          patch("agents.audio_agent._client") as mock_client:
         mock_client.audio.transcriptions.create.return_value.text = "  "

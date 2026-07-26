@@ -25,13 +25,10 @@ from agents.vision_agent import run_vision_agent
 from agents.audio_agent import run_audio_agent
 from agents.scoring_agent import run_scoring_agent
 from agents.preference_agent import check_blacklist, check_implicit_blacklist
-from downloader import download_video, has_audio_track
+from downloader import download_video, has_audio_track, has_meaningful_audio
 from database import init_db, get_taste_profile, record_analysis
 
 init_db()
-
-# 一邊訊號很多、另一邊完全沒有訊號，視為落差過大，觸發 reflection
-_REFLECTION_SIGNAL_GAP = 2
 
 
 def _log(emoji: str, node: str, msg: str) -> None:
@@ -70,9 +67,14 @@ def _early_stop_node(state: AgentState) -> dict:
 def _download_node(state: AgentState) -> dict:
     _log("⬇️", "Download", "下載影片中...")
     video_path = download_video(state["url"])
-    skip_audio = not has_audio_track(video_path)
-    if skip_audio:
+    # 兩層判斷：容器裡有沒有音軌（便宜），加上音軌是不是幾乎全靜音（volumedetect，抓「有音軌但沒聲音」的情況）
+    no_track = not has_audio_track(video_path)
+    silent = not no_track and not has_meaningful_audio(video_path)
+    skip_audio = no_track or silent
+    if no_track:
         _log("🔇", "Orchestrator", "偵測到無音軌 → 決定跳過 Audio Agent")
+    elif silent:
+        _log("🔇", "Orchestrator", "有音軌但音量近乎靜音 → 決定跳過 Audio Agent")
     else:
         _log("🔊", "Orchestrator", "有音軌 → Audio Agent 將執行")
     return {"video_path": str(video_path), "skip_audio": skip_audio}
@@ -81,6 +83,7 @@ def _download_node(state: AgentState) -> dict:
 def _vision_node(state: AgentState) -> dict:
     _log("👁️", "Vision", "每秒擷取一幀，送 GPT-4o 分析...")
     result = run_vision_agent(state)
+    _log("👁️", "Vision", f"畫面內容：{result.get('vision_description') or '（無描述）'}")
     _log("👁️", "Vision", f"完成 → signals: {result['vision_signals']}")
     return result
 
@@ -88,25 +91,34 @@ def _vision_node(state: AgentState) -> dict:
 def _audio_node(state: AgentState) -> dict:
     _log("🎧", "Audio", "Whisper 轉錄 + 語意分析中...")
     result = run_audio_agent(state)
+    transcript = result.get("transcript") or ""
+    preview = transcript[:80] + ("..." if len(transcript) > 80 else "")
+    _log("🎧", "Audio", f"逐字稿：{preview or '（無逐字稿）'}")
     _log("🎧", "Audio", f"完成 → signals: {result['audio_signals']}")
     return result
 
 
-def _scoring_node(state: AgentState) -> dict:
-    _log("🧮", "Scoring", "整合三方訊號 + 個人品味檔案，計算評分...")
+def _score_with_reflection(state: AgentState) -> dict:
+    # log 直接寫在這裡（不是外面的 _scoring_node），因為 run_pipeline_multi（群組場景）
+    # 是直接呼叫這個函式、跳過 _scoring_node 的，log 寫在這才能保證單人/群組兩條路徑都看得到
+    _log("🧮", "Scoring", f"整合三方訊號 + 個人品味檔案，計算評分...（{state['user_id']}）")
     result = run_scoring_agent(state)
 
-    # Agentic 行為 3：Vision/Audio 訊號落差過大 → 二次 reflection
-    vision_signals = state.get("vision_signals") or []
-    audio_signals = state.get("audio_signals") or []
-    signal_gap = abs(len(vision_signals) - len(audio_signals))
-    if not state.get("needs_reflection") and signal_gap >= _REFLECTION_SIGNAL_GAP:
+    # Agentic 行為 3：畫面內容跟語音內容對不上（疑似拼接/農場內容）→ 二次 reflection
+    if not state.get("needs_reflection") and result.get("content_mismatch"):
         _log("🔄", "Orchestrator",
-             f"Vision({len(vision_signals)}) 與 Audio({len(audio_signals)}) 訊號落差過大 → 觸發二次 reflection")
-        reflection_state = {**state, **result, "needs_reflection": True}
+             f"畫面與語音內容疑似不一致（{result.get('mismatch_reason')}）→ 觸發二次 reflection")
+        reflection_state = {
+            **state,
+            "needs_reflection": True,
+            "mismatch_reason": result.get("mismatch_reason", ""),
+        }
         result = run_scoring_agent(reflection_state)
         result["needs_reflection"] = True
 
+    # 五維細項只印在終端機，不塞進 LINE 訊息——沒有各自的理由支撐，秀給使用者看像隨機數字，
+    # 但技術細節留給想看的人還是有價值
+    _log("🧮", "Scoring", f"各項評分: {result.get('scores')}")
     _log("🧮", "Scoring", f"評分: {result['overall_score']}/100 ({result['verdict']}) — {result['summary']}")
     return result
 
@@ -153,7 +165,7 @@ def build_graph():
     graph.add_node("download", _download_node)
     graph.add_node("vision", _vision_node)
     graph.add_node("audio", _audio_node)
-    graph.add_node("scoring", _scoring_node)
+    graph.add_node("scoring", _score_with_reflection)
     graph.add_node("preference", _preference_node)
 
     graph.set_entry_point("metadata")
@@ -185,12 +197,13 @@ def run_pipeline(user_id: str, url: str) -> dict:
         "url": url,
         "creator_id": None, "creator_name": None,
         "video_path": None, "frames": None, "transcript": None,
-        "metadata_signals": None, "vision_signals": None, "audio_signals": None,
+        "metadata_signals": None, "vision_signals": None, "vision_description": None, "audio_signals": None,
         "tags": None, "scores": None, "overall_score": None, "verdict": None,
         "summary": None,
         "taste_profile": get_taste_profile(user_id) or "",
         "user_feedback": None,
         "should_early_stop": False, "skip_audio": False, "needs_reflection": False,
+        "mismatch_reason": None,
     }
     final = _compiled_graph.invoke(initial)
     return {
@@ -198,10 +211,80 @@ def run_pipeline(user_id: str, url: str) -> dict:
         "verdict": final.get("verdict"),
         "summary": final.get("summary"),
         "tags": final.get("tags"),
+        "scores": final.get("scores"),
         "creator_id": final.get("creator_id"),
         "creator_name": final.get("creator_name"),
         "should_early_stop": final.get("should_early_stop", False),
+        "taste_profile": final.get("taste_profile") or "",
     }
+
+
+def run_pipeline_multi(user_ids: list[str], url: str) -> dict[str, dict]:
+    """群組 demo 用：Metadata/Vision/Audio 訊號只算一次（跟看的人是誰無關），
+    但針對每個指定的 user_id 各自套用自己的 taste_profile 跑一次 scoring，
+    回傳 {user_id: 判定結果} 讓 line_bot.py 組成一則列出每個人分數的訊息。"""
+    shared: AgentState = {
+        "user_id": "", "url": url,
+        "creator_id": None, "creator_name": None,
+        "video_path": None, "frames": None, "transcript": None,
+        "metadata_signals": None, "vision_signals": None, "vision_description": None, "audio_signals": None,
+        "tags": None, "scores": None, "overall_score": None, "verdict": None,
+        "summary": None, "taste_profile": "", "user_feedback": None,
+        "should_early_stop": False, "skip_audio": False, "needs_reflection": False,
+        "mismatch_reason": None,
+    }
+    shared.update(_metadata_node(shared))
+
+    # Agentic 行為 1：黑名單早停也要在群組場景成立——如果這次要分析的每個人都已經封鎖這個頻道，
+    # 直接跳過下載/Vision/Audio（真正省成本），不要像以前那樣先跑完整分析才決定要不要顯示早停結果
+    creator_id = shared.get("creator_id")
+    blacklist_status = {
+        user_id: check_blacklist(user_id, creator_id)["should_early_stop"] if creator_id else False
+        for user_id in user_ids
+    }
+    all_blacklisted = bool(user_ids) and all(blacklist_status.values())
+
+    if all_blacklisted:
+        _log("🚫", "Orchestrator", "這次分析的所有人都已封鎖這個頻道！提早終止，省下下載+Vision+Whisper 成本")
+    else:
+        shared.update(_download_node(shared))
+        shared.update(_vision_node(shared))
+        if not shared["skip_audio"]:
+            shared.update(_audio_node(shared))
+
+    results: dict[str, dict] = {}
+    for user_id in user_ids:
+        taste_profile = get_taste_profile(user_id) or ""
+        if blacklist_status[user_id]:
+            if not all_blacklisted:
+                _log("🚫", "Orchestrator", f"{user_id} 的黑名單命中！提早終止")
+            scored = _early_stop_node(shared)
+        else:
+            user_state = {**shared, "user_id": user_id, "taste_profile": taste_profile}
+            scored = _score_with_reflection(user_state)
+
+        record_analysis(
+            user_id=user_id, url=url, creator_id=creator_id or "",
+            creator_name=shared.get("creator_name"),
+            verdict=scored.get("verdict") or "review",
+            overall_score=scored.get("overall_score") or 0,
+            summary=scored.get("summary") or "",
+            tags=scored.get("tags") or [],
+        )
+        if creator_id:
+            check_implicit_blacklist(user_id, creator_id)
+
+        results[user_id] = {
+            "overall_score": scored.get("overall_score"),
+            "verdict": scored.get("verdict"),
+            "summary": scored.get("summary"),
+            "tags": scored.get("tags"),
+            "scores": scored.get("scores"),
+            "creator_id": creator_id,
+            "creator_name": shared.get("creator_name"),
+            "taste_profile": taste_profile,
+        }
+    return results
 
 
 if __name__ == "__main__":

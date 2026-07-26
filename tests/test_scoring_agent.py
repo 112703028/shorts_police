@@ -4,15 +4,17 @@ from agents.scoring_agent import run_scoring_agent, _verdict_from_score
 from models import AgentState
 
 
-def _make_state(metadata_signals=None, vision_signals=None, audio_signals=None, taste_profile="") -> AgentState:
+def _make_state(metadata_signals=None, vision_signals=None, audio_signals=None, taste_profile="",
+                 transcript="") -> AgentState:
     return {
         "user_id": "U1", "url": "https://yt.be/x", "creator_id": "UC1",
-        "video_path": "tmp/x.mp4", "frames": [], "transcript": "",
+        "video_path": "tmp/x.mp4", "frames": [], "transcript": transcript,
         "metadata_signals": metadata_signals, "vision_signals": vision_signals,
         "audio_signals": audio_signals, "tags": None, "scores": None,
         "overall_score": None, "verdict": None, "summary": None,
         "taste_profile": taste_profile, "user_feedback": None,
         "should_early_stop": False, "skip_audio": False, "needs_reflection": False,
+        "mismatch_reason": None,
     }
 
 
@@ -88,3 +90,68 @@ def test_scoring_agent_defaults_missing_dimension_to_neutral_five():
 ])
 def test_verdict_from_score_boundaries(score, expected):
     assert _verdict_from_score(score) == expected
+
+
+MOCK_MISMATCH_RESPONSE = '''{
+  "scores": {"ai_generated": 3, "emotional_manipulation": 4, "originality": 2, "information_value": 2, "visual_quality": 5},
+  "summary": "畫面與語音疑似拼接",
+  "tags": ["內容農場"],
+  "content_mismatch": true,
+  "mismatch_reason": "畫面是貓咪影片但語音在講政治新聞"
+}'''
+
+
+def test_scoring_agent_parses_content_mismatch_fields():
+    state = _make_state(vision_signals=["貓咪追逐光點"], audio_signals=["提到政治話題"],
+                         transcript="今天要來跟大家聊聊最新的選舉新聞")
+    with patch("agents.scoring_agent._client") as mock_client:
+        mock_client.chat.completions.create.return_value = _mock_response(MOCK_MISMATCH_RESPONSE)
+        result = run_scoring_agent(state)
+
+    assert result["content_mismatch"] is True
+    assert result["mismatch_reason"] == "畫面是貓咪影片但語音在講政治新聞"
+
+
+def test_scoring_agent_forces_content_mismatch_false_when_no_transcript():
+    # 沒有逐字稿（無語音/轉錄失敗）時，就算 LLM 誤判 content_mismatch=true 也要被強制改回 false，
+    # 避免「沒有語音」本身被當成內容不一致，白白觸發一次不必要的 reflection
+    state = _make_state(vision_signals=["貓咪追逐光點"], audio_signals=["幾乎無語音或純音樂"], transcript="")
+    with patch("agents.scoring_agent._client") as mock_client:
+        mock_client.chat.completions.create.return_value = _mock_response(MOCK_MISMATCH_RESPONSE)
+        result = run_scoring_agent(state)
+
+    assert result["content_mismatch"] is False
+    assert result["mismatch_reason"] == ""
+
+
+def test_scoring_agent_defaults_content_mismatch_false_when_absent():
+    state = _make_state()
+    with patch("agents.scoring_agent._client") as mock_client:
+        mock_client.chat.completions.create.return_value = _mock_response(MOCK_RESPONSE)
+        result = run_scoring_agent(state)
+
+    assert result["content_mismatch"] is False
+    assert result["mismatch_reason"] == ""
+
+
+def test_scoring_agent_includes_reflection_block_when_needs_reflection():
+    state = _make_state()
+    state["needs_reflection"] = True
+    state["mismatch_reason"] = "畫面是貓咪影片但語音在講政治新聞"
+    with patch("agents.scoring_agent._client") as mock_client:
+        mock_client.chat.completions.create.return_value = _mock_response(MOCK_RESPONSE)
+        run_scoring_agent(state)
+
+    sent_prompt = mock_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    assert "二次檢視" in sent_prompt
+    assert "畫面是貓咪影片但語音在講政治新聞" in sent_prompt
+
+
+def test_scoring_agent_omits_reflection_block_when_not_reflecting():
+    state = _make_state()
+    with patch("agents.scoring_agent._client") as mock_client:
+        mock_client.chat.completions.create.return_value = _mock_response(MOCK_RESPONSE)
+        run_scoring_agent(state)
+
+    sent_prompt = mock_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    assert "二次檢視" not in sent_prompt
