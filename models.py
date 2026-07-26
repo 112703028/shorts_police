@@ -11,6 +11,7 @@ class AgentState(TypedDict):
     transcript: Optional[str]
     metadata_signals: Optional[list[str]]
     vision_signals: Optional[list[str]]
+    vision_description: Optional[str]  # 畫面實際內容的一句話描述，方便核對 AI 有沒有認真看
     audio_signals: Optional[list[str]]
     tags: Optional[list[str]]
     scores: Optional[dict]          # ai_generated / emotional_manipulation / originality / information_value / visual_quality
@@ -21,4 +22,5 @@ class AgentState(TypedDict):
     user_feedback: Optional[str]    # 使用者回饋原文（👍/👎 或文字說明）
     should_early_stop: bool         # 命中封鎖頻道，提早終止
     skip_audio: bool                # 影片無語音，跳過 Audio Agent
-    needs_reflection: bool          # Vision / Audio 結果矛盾，觸發二次 reflection
+    needs_reflection: bool          # 畫面與語音內容疑似不一致，觸發二次 reflection
+    mismatch_reason: Optional[str]  # needs_reflection 觸發時，上一輪判斷的不一致原因，帶回第二次 scoring 的 prompt

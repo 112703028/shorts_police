@@ -58,7 +58,12 @@ ONBOARDING_CONTEXT = """【情境：首次使用問卷】
 不要直接寫「類別1」「類別3」這種沒有意義的字）。"""
 
 FEEDBACK_CONTEXT = """【情境：針對剛看完的判定結果回饋】
-使用者剛收到一支影片的判定，標籤是 {tags}，現在說：「{message}」"""
+這支影片的畫面內容：{vision_description}
+這支影片的語音逐字稿（節錄）：{transcript}
+
+使用者剛收到一支影片的判定，標籤是 {tags}，現在說：「{message}」
+如果使用者的話是在講畫面或語音裡的具體內容（例如反諷、某句話的語境），請對照上面的畫面內容/逐字稿判斷，
+不要只靠 tags 猜測。"""
 
 
 def run_preference_agent(state: dict) -> dict:
@@ -75,11 +80,16 @@ def run_preference_agent(state: dict) -> dict:
     tags = state.get("tags") or []
     creator_id = state.get("creator_id")
     creator_name = state.get("creator_name")
+    vision_description = state.get("vision_description") or "（無資料）"
+    transcript = (state.get("transcript") or "（無資料）")[:1000]
 
     is_onboarding = existing_profile == ""
     context_block = (
         ONBOARDING_CONTEXT.format(questions=ONBOARDING_QUESTIONS, message=message) if is_onboarding
-        else FEEDBACK_CONTEXT.format(tags=tags, message=message)
+        else FEEDBACK_CONTEXT.format(
+            tags=tags, message=message,
+            vision_description=vision_description, transcript=transcript,
+        )
     )
 
     prompt = PREFERENCE_PROMPT.format(
@@ -92,6 +102,7 @@ def run_preference_agent(state: dict) -> dict:
         model=GPT_MODEL,
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
+        temperature=0,
     )
     parsed = json.loads(response.choices[0].message.content)
 

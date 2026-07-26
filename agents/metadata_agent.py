@@ -3,6 +3,7 @@ from datetime import datetime
 import yt_dlp
 from openai import OpenAI
 from models import AgentState
+from downloader import load_signal_cache, save_signal_cache, base_ydl_opts
 from config import GPT_MODEL, OPENAI_API_KEY
 
 _client = OpenAI(api_key=OPENAI_API_KEY)
@@ -45,12 +46,12 @@ METADATA_PROMPT = """你是一個專門識別「廢片」與「營銷號」的�
 def _get_recent_channel_info(channel_id: str, n: int = 8) -> tuple[list[str], str]:
     """抓頻道最近 n 支影片的標題和上傳日期，回傳 (標題列表, 發片頻率描述)"""
     channel_url = f"https://www.youtube.com/channel/{channel_id}/videos"
-    opts = {
+    opts = base_ydl_opts({
         "skip_download": True,
         "quiet": True,
         "playlistend": n,
         "extract_flat": True,
-    }
+    })
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(channel_url, download=False)
@@ -75,8 +76,14 @@ def _get_recent_channel_info(channel_id: str, n: int = 8) -> tuple[list[str], st
 
 
 def run_metadata_agent(state: AgentState) -> dict:
+    # 影片本身的訊號跟「誰在問」無關，同一支片重複分析（不同人、不同次）直接用快取，
+    # 不重打 yt-dlp 抓頻道近期影片和 GPT-4o
+    cached = load_signal_cache(state["url"], "metadata")
+    if cached is not None:
+        return cached
+
     # 1. 抓這支影片的 metadata（不下載影片本體）
-    opts = {"skip_download": True, "quiet": True}
+    opts = base_ydl_opts({"skip_download": True, "quiet": True})
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(state["url"], download=False)
 
@@ -110,14 +117,17 @@ def run_metadata_agent(state: AgentState) -> dict:
         model=GPT_MODEL,
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
+        temperature=0,
     )
     parsed = json.loads(response.choices[0].message.content)
 
-    return {
+    result = {
         "metadata_signals": parsed.get("signals", []),
         "creator_id": channel_id,
         "creator_name": info.get("uploader", ""),
     }
+    save_signal_cache(state["url"], "metadata", result)
+    return result
 
 
 if __name__ == "__main__":

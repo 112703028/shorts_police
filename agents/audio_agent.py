@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from openai import OpenAI
-from downloader import extract_audio
+from downloader import extract_audio, load_signal_cache, save_signal_cache
 from models import AgentState
 from config import GPT_MODEL, WHISPER_MODEL, OPENAI_API_KEY
 
@@ -35,6 +35,13 @@ def _transcribe(audio_path: Path) -> str:
 
 
 def run_audio_agent(state: AgentState) -> dict:
+    # 語音訊號跟「誰在問」無關，同一支片重複分析直接用快取，不重打 Whisper/GPT-4o
+    url = state.get("url")
+    if url:
+        cached = load_signal_cache(url, "audio")
+        if cached is not None:
+            return cached
+
     # 1. 重用 Vision Agent 已下載的影片，抽出音軌（不重新下載）
     video_path = Path(state["video_path"])
     audio_path = extract_audio(video_path)
@@ -44,20 +51,27 @@ def run_audio_agent(state: AgentState) -> dict:
 
     # 幾乎無語音時直接回報，不用再打一次 GPT（Orchestrator 也是靠 has_audio_track 決定跳不跳過這個 agent，這裡是保險）
     if len(transcript.strip()) < 10:
-        return {"audio_signals": ["幾乎無語音或純音樂"], "transcript": transcript}
+        result = {"audio_signals": ["幾乎無語音或純音樂"], "transcript": transcript}
+        if url:
+            save_signal_cache(url, "audio", result)
+        return result
 
     # 3. 送 GPT-4o 分析雞湯關鍵字/恐懼訴求/AI語音特徵/資訊密度（截 2000 字避免 prompt 過長）
     response = _client.chat.completions.create(
         model=GPT_MODEL,
         messages=[{"role": "user", "content": AUDIO_PROMPT.format(transcript=transcript[:2000])}],
         response_format={"type": "json_object"},
+        temperature=0,
     )
     parsed = json.loads(response.choices[0].message.content)
 
-    return {
+    result = {
         "audio_signals": parsed.get("signals", []),
         "transcript": transcript,
     }
+    if url:
+        save_signal_cache(url, "audio", result)
+    return result
 
 
 if __name__ == "__main__":
