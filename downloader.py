@@ -29,6 +29,8 @@ def load_signal_cache(url: str, agent: str) -> dict | None:
     有就直接回傳上次的結果，不重打 GPT-4o/Whisper API（省錢也省時間）。"""
     path = Path(TMP_DIR) / f"{_video_id(url)}_{agent}.json"
     if path.exists():
+        # 印出來才看得到「省成本」這件事真的發生了，不然跟真的打一次 API 在 log 上長得一樣
+        print(f"⚡ [Cache] {agent} 快取命中，跳過 API 呼叫", flush=True)
         return json.loads(path.read_text())
     return None
 

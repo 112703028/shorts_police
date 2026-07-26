@@ -56,3 +56,15 @@ def test_format_verdict_no_name_prefix_by_default():
     from line_bot import format_verdict
     result = format_verdict(overall_score=60, verdict="review", summary="邊界案例")
     assert "👤" not in result
+
+
+def test_format_verdict_includes_tags_when_given():
+    from line_bot import format_verdict
+    result = format_verdict(overall_score=15, verdict="trash", summary="測試", tags=["AI生成", "無資訊價值"])
+    assert "🏷️ AI生成、無資訊價值" in result
+
+
+def test_format_verdict_no_tag_line_when_absent():
+    from line_bot import format_verdict
+    result = format_verdict(overall_score=60, verdict="review", summary="邊界案例")
+    assert "🏷️" not in result

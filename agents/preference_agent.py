@@ -134,8 +134,12 @@ def check_blacklist(user_id: str, creator_id: str) -> dict:
 def check_implicit_blacklist(user_id: str, creator_id: str) -> None:
     """每次 Scoring Agent 跑完後呼叫（不需要使用者回饋觸發）。
     同一頻道連續 N 次都被判 trash，自動封鎖，並標註信心較低的原因。"""
-    if count_consecutive_trash(user_id, creator_id) >= IMPLICIT_BLACKLIST_THRESHOLD:
+    streak = count_consecutive_trash(user_id, creator_id)
+    if streak >= IMPLICIT_BLACKLIST_THRESHOLD:
         add_to_blacklist(user_id, creator_id, reason="連續3次trash自動偵測")
+        # 不能 import graph._log（graph.py 反過來 import 這個檔案，會循環引用），
+        # 直接印同樣格式的 log，讓這個 agentic 行為在終端機上看得到
+        print(f"🔒 [Orchestrator] {user_id} 對頻道 {creator_id} 連續 {streak} 次 trash → 自動加入黑名單（隱性學習）", flush=True)
 
 
 if __name__ == "__main__":

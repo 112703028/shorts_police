@@ -99,6 +99,9 @@ def _audio_node(state: AgentState) -> dict:
 
 
 def _score_with_reflection(state: AgentState) -> dict:
+    # log 直接寫在這裡（不是外面的 _scoring_node），因為 run_pipeline_multi（群組場景）
+    # 是直接呼叫這個函式、跳過 _scoring_node 的，log 寫在這才能保證單人/群組兩條路徑都看得到
+    _log("🧮", "Scoring", f"整合三方訊號 + 個人品味檔案，計算評分...（{state['user_id']}）")
     result = run_scoring_agent(state)
 
     # Agentic 行為 3：畫面內容跟語音內容對不上（疑似拼接/農場內容）→ 二次 reflection
@@ -113,12 +116,9 @@ def _score_with_reflection(state: AgentState) -> dict:
         result = run_scoring_agent(reflection_state)
         result["needs_reflection"] = True
 
-    return result
-
-
-def _scoring_node(state: AgentState) -> dict:
-    _log("🧮", "Scoring", "整合三方訊號 + 個人品味檔案，計算評分...")
-    result = _score_with_reflection(state)
+    # 五維細項只印在終端機，不塞進 LINE 訊息——沒有各自的理由支撐，秀給使用者看像隨機數字，
+    # 但技術細節留給想看的人還是有價值
+    _log("🧮", "Scoring", f"各項評分: {result.get('scores')}")
     _log("🧮", "Scoring", f"評分: {result['overall_score']}/100 ({result['verdict']}) — {result['summary']}")
     return result
 
@@ -165,7 +165,7 @@ def build_graph():
     graph.add_node("download", _download_node)
     graph.add_node("vision", _vision_node)
     graph.add_node("audio", _audio_node)
-    graph.add_node("scoring", _scoring_node)
+    graph.add_node("scoring", _score_with_reflection)
     graph.add_node("preference", _preference_node)
 
     graph.set_entry_point("metadata")

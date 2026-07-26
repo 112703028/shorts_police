@@ -65,13 +65,16 @@ def extract_youtube_url(text: str) -> str | None:
     return m.group(0) if m else None
 
 
-def format_verdict(overall_score: int, verdict: str, summary: str, name: str | None = None) -> str:
-    # 只給 verdict + 總分 + 一句話理由：五維細項數字沒有各自的理由支撐，
-    # 秀出來反而像隨機分數；細節留給終端機 log（Vision/Audio/Metadata 各自的具體訊號）
+def format_verdict(overall_score: int, verdict: str, summary: str, tags: list[str] | None = None,
+                    name: str | None = None) -> str:
+    # 只給 verdict + 總分 + 一句話理由 + tags：五維細項數字沒有各自的理由支撐，
+    # 秀出來反而像隨機分數，細節留給終端機 log；tags 是自我解釋的關鍵字，不需要額外理由佐證，適合秀出來
     verdict_emoji = {"trash": "❌", "review": "⚠️", "keep": "✅"}.get(verdict, "⚠️")
     verdict_label = {"trash": "廢片", "review": "普通", "keep": "好片"}.get(verdict, "普通")
     prefix = f"👤 {name}：" if name else ""
-    return f"{prefix}{verdict_emoji} {verdict_label}（{overall_score}分）— {summary}"
+    header = f"{prefix}{verdict_emoji} {verdict_label}（{overall_score}分）— {summary}"
+    tag_line = f"\n🏷️ {'、'.join(tags)}" if tags else ""
+    return f"{header}{tag_line}"
 
 
 def _display_name(user_id: str, group_id: str | None = None) -> str:
@@ -159,6 +162,7 @@ def _run_analysis(user_id: str, target_id: str, url: str) -> None:
             overall_score=r.get("overall_score", 0),
             verdict=r.get("verdict", "review"),
             summary=r.get("summary", ""),
+            tags=r.get("tags"),
             name=name,
         )
         message_id = _push(target_id, text)

@@ -34,12 +34,15 @@ Metadata 訊號：{metadata_signals}
 {{
   "scores": {{"ai_generated": 0到10, "emotional_manipulation": 0到10, "originality": 0到10, "information_value": 0到10, "visual_quality": 0到10}},
   "summary": "一句話說明理由（20字以內）",
-  "tags": ["<最多4個標籤，只能從上面提供的 metadata/畫面/語音訊號裡歸納出來，不要憑空套用常見標籤>"],
+  "tags": ["<最多4個標籤，只描述內容主題（不是問題訊號），只能參考「畫面內容描述」和「語音逐字稿」歸納，
+  例如：貓咪、遊戲實況、開箱、政治新聞>"],
   "content_mismatch": true 或 false,
   "mismatch_reason": "<content_mismatch 是 true 時，一句話說明畫面跟語音哪裡對不上；false 就回空字串>"
 }}
 
-tags 必須對應到上面實際列出的訊號，如果沒有訊號支持某個標籤就不要加。"""
+tags 只能從「畫面內容描述」和「語音逐字稿」歸納主題，不要參考問題訊號（問題已經反映在 summary 和五維分數裡，
+不需要在 tags 重複）。如果畫面描述太籠統、逐字稿是（無逐字稿）或內容不夠具體，判斷不出明確主題，
+tags 就回空陣列，不要硬掰一個看起來合理但沒有根據的主題。"""
 
 REFLECTION_BLOCK = """
 【二次檢視】上一輪你判斷畫面與語音內容疑似不一致（原因：{mismatch_reason}），
