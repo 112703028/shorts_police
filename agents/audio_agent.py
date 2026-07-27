@@ -2,26 +2,34 @@ import json
 from pathlib import Path
 from openai import OpenAI
 from downloader import extract_audio, load_signal_cache, save_signal_cache
+from acoustics import analyze_prosody, describe_acoustics
 from models import AgentState
 from config import GPT_MODEL, WHISPER_MODEL, OPENAI_API_KEY
 
 _client = OpenAI(api_key=OPENAI_API_KEY)
 
-AUDIO_PROMPT = """你是一個影片語音品質分析師。以下是一支 YouTube Shorts 的語音轉錄文字：
+AUDIO_PROMPT = """你是一個影片語音品質分析師。
 
+【語音轉錄文字】
 「{transcript}」
+
+【聲學特徵（程式從音訊實際量測，不是猜的）】
+{acoustics}
 
 偵測重點：
 1. 雞湯關鍵字（勵志語錄、心靈雞湯話術）
-2. 恐懼訴求（「不看後悔」「小心」型話術）
-3. AI 語音特徵（TTS 機器人聲：完全沒有語助詞、沒有自我修正、句子結構過度工整、語氣詞缺席）
+2. 誇大言詞（「不看後悔」「小心」型話術）
+3. AI 語音特徵（TTS 機器人聲）— 綜合兩種證據判斷：
+   - 文字面：完全沒有語助詞、沒有自我修正、句子結構過度工整、語氣詞缺席
+   - 聲學面：音高變化與音量起伏都異常平穩（見上方數據）
+   兩種證據都指向平穩才較有把握判為 TTS；只是文字正式、但聲學有明顯起伏，可能只是正經的真人朗讀，不要判成 TTS
 4. 資訊密度低（實質內容少、填充廢話多）
 
 回覆 JSON（不要加 markdown code block）:
 {{
-  "signals": ["<你真的在逐字稿裡看到的問題，一句話具體描述，可引用逐字稿中的字句>"]
+  "signals": ["<你真的在逐字稿或聲學數據裡看到的問題，一句話具體描述；若判為 TTS 請引用聲學數字佐證>"]
 }}
-只回報逐字稿裡真的看得出來的問題，不要憑空推測。若沒有發現任何問題，signals 回空陣列。"""
+只回報真的看得出來的問題，不要憑空推測。若沒有發現任何問題，signals 回空陣列。"""
 
 
 def _transcribe(audio_path: Path) -> str:
@@ -56,10 +64,16 @@ def run_audio_agent(state: AgentState) -> dict:
             save_signal_cache(url, "audio", result)
         return result
 
-    # 3. 送 GPT-4o 分析雞湯關鍵字/恐懼訴求/AI語音特徵/資訊密度（截 2000 字避免 prompt 過長）
+    # 3. 量測聲學特徵（音高/音量平穩度），讓 TTS 判斷有客觀數據佐證，而非純從文字猜
+    acoustic_features = analyze_prosody(audio_path)
+
+    # 4. 送 GPT-4o 綜合逐字稿 + 聲學數據判斷（截 2000 字避免 prompt 過長）
     response = _client.chat.completions.create(
         model=GPT_MODEL,
-        messages=[{"role": "user", "content": AUDIO_PROMPT.format(transcript=transcript[:2000])}],
+        messages=[{"role": "user", "content": AUDIO_PROMPT.format(
+            transcript=transcript[:2000],
+            acoustics=describe_acoustics(acoustic_features),
+        )}],
         response_format={"type": "json_object"},
         temperature=0,
     )
@@ -68,6 +82,7 @@ def run_audio_agent(state: AgentState) -> dict:
     result = {
         "audio_signals": parsed.get("signals", []),
         "transcript": transcript,
+        "acoustic_features": acoustic_features,
     }
     if url:
         save_signal_cache(url, "audio", result)
@@ -80,6 +95,7 @@ if __name__ == "__main__":
 
     url = sys.argv[1] if len(sys.argv) > 1 else "https://www.youtube.com/shorts/XGX5roufnrs"
     video_path = download_video(url)
-    result = run_audio_agent({"video_path": str(video_path)})
+    result = run_audio_agent({"video_path": str(video_path), "url": url})
     print("逐字稿:", result["transcript"][:200])
+    print("聲學特徵:", result.get("acoustic_features"))
     print("audio_signals:", result["audio_signals"])
