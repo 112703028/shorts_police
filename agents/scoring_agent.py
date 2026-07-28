@@ -17,22 +17,25 @@ Metadata 訊號：{metadata_signals}
 {taste_profile}
 
 若品味檔案裡的「例外規則」或「喜歡的頻道」跟這支影片相關，請依照例外規則調整判斷，不要死板套用一般標準。
+反過來，若品味檔案裡的「討厭的內容」清單跟這支影片的實際主題相關（對照「畫面內容描述」/「語音逐字稿」判斷主題是否真的符合，
+不要只看關鍵字表面相似），要據此把對應維度的分數調低，不能只在有例外規則時才參考品味檔案——討厭清單跟例外規則一樣都要真的影響分數，
+不是背景資訊而已。
 
 請比對「畫面內容描述」跟「語音逐字稿」是否對得上（例如畫面是可愛寵物但語音在講完全無關的話題、語音內容明顯跟畫面時序兜不起來），
 這種落差代表可能是拼接或內容農場產物，屬於可疑訊號；如果兩者本來就沒有強關聯（例如純知識分享搭配任意背景畫面），不要硬套成問題。
 若語音逐字稿是「（無逐字稿）」或影片本身沒有語音，代表根本沒有語音內容可以比對，content_mismatch 一律回 false，
 不要把「沒有語音」這件事本身當成不一致。
 {reflection_block}
-給出五個維度評分（每項 0-10，分數越高代表這個維度越沒問題/品質越好）：
-- ai_generated：內容不是 AI 生成的程度（10=確定不是AI生成，0=高度確定AI生成）
-- emotional_manipulation：沒有情緒操弄的程度（10=完全沒有雞湯/恐懼訴求話術，0=大量情緒操弄）
+給出五個維度評分（每項 0-10，分數越高代表這個維度越沒問題/品質越好，五個維度的極性一致，都是分數越高越好）：
+- authenticity：真實度，不是 AI 生成的程度（10=確定是真人原創內容，0=高度確定AI生成）
+- sincerity：真誠度，沒有情緒操弄的程度（10=完全沒有雞湯/恐懼訴求話術，0=大量情緒操弄）
 - originality：原創度（10=高度原創，0=完全搬運/重複）
 - information_value：資訊價值（10=資訊密度高，0=毫無資訊價值）
 - visual_quality：畫面品質（10=製作精良，0=粗製濫造）
 
 回覆 JSON（不要加 markdown code block）:
 {{
-  "scores": {{"ai_generated": 0到10, "emotional_manipulation": 0到10, "originality": 0到10, "information_value": 0到10, "visual_quality": 0到10}},
+  "scores": {{"authenticity": 0到10, "sincerity": 0到10, "originality": 0到10, "information_value": 0到10, "visual_quality": 0到10}},
   "summary": "一句話說明理由（20字以內）",
   "tags": ["<最多4個標籤，只描述內容主題（不是問題訊號），只能參考「畫面內容描述」和「語音逐字稿」歸納，
   例如：貓咪、遊戲實況、開箱、政治新聞>"],
@@ -55,7 +58,7 @@ originality 和 information_value 應該對應調低；如果重新檢視後覺�
 #   overall_score = 五個維度 0-10 分的平均 × 10（每個維度權重相同）
 #   verdict：overall_score < 40 是 trash，40-69 是 review，70 以上是 keep
 
-DIMENSIONS = ["ai_generated", "emotional_manipulation", "originality", "information_value", "visual_quality"]
+DIMENSIONS = ["authenticity", "sincerity", "originality", "information_value", "visual_quality"]
 
 
 def _clamp_scores(raw_scores: dict) -> dict:

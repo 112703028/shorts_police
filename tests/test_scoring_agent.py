@@ -19,7 +19,7 @@ def _make_state(metadata_signals=None, vision_signals=None, audio_signals=None, 
 
 
 MOCK_RESPONSE = '''{
-  "scores": {"ai_generated": 1, "emotional_manipulation": 2, "originality": 1, "information_value": 1, "visual_quality": 3},
+  "scores": {"authenticity": 1, "sincerity": 2, "originality": 1, "information_value": 1, "visual_quality": 3},
   "summary": "AI生成動物影片，無資訊價值",
   "tags": ["AI生成", "無資訊價值"]
 }'''
@@ -40,7 +40,7 @@ def test_scoring_agent_computes_overall_score_from_dimension_average():
 
     assert result["overall_score"] == 16
     assert result["verdict"] == "trash"
-    assert result["scores"]["ai_generated"] == 1
+    assert result["scores"]["authenticity"] == 1
     assert "AI生成" in result["tags"]
 
 
@@ -59,19 +59,19 @@ def test_scoring_agent_ignores_llm_provided_overall_score_and_verdict():
 
 
 def test_scoring_agent_clamps_out_of_range_dimension_scores():
-    out_of_range = MOCK_RESPONSE.replace('"ai_generated": 1,', '"ai_generated": 999,')
+    out_of_range = MOCK_RESPONSE.replace('"authenticity": 1,', '"authenticity": 999,')
     state = _make_state()
     with patch("agents.scoring_agent._client") as mock_client:
         mock_client.chat.completions.create.return_value = _mock_response(out_of_range)
         result = run_scoring_agent(state)
 
-    assert result["scores"]["ai_generated"] == 10  # 夾在 0-10
+    assert result["scores"]["authenticity"] == 10  # 夾在 0-10
     # (10+2+1+1+3)/5 = 3.4 -> 34
     assert result["overall_score"] == 34
 
 
 def test_scoring_agent_defaults_missing_dimension_to_neutral_five():
-    missing_dimension = '{"scores": {"ai_generated": 10, "emotional_manipulation": 10, "originality": 10, "information_value": 10}, "summary": "x", "tags": []}'
+    missing_dimension = '{"scores": {"authenticity": 10, "sincerity": 10, "originality": 10, "information_value": 10}, "summary": "x", "tags": []}'
     state = _make_state()
     with patch("agents.scoring_agent._client") as mock_client:
         mock_client.chat.completions.create.return_value = _mock_response(missing_dimension)
@@ -93,7 +93,7 @@ def test_verdict_from_score_boundaries(score, expected):
 
 
 MOCK_MISMATCH_RESPONSE = '''{
-  "scores": {"ai_generated": 3, "emotional_manipulation": 4, "originality": 2, "information_value": 2, "visual_quality": 5},
+  "scores": {"authenticity": 3, "sincerity": 4, "originality": 2, "information_value": 2, "visual_quality": 5},
   "summary": "畫面與語音疑似拼接",
   "tags": ["內容農場"],
   "content_mismatch": true,

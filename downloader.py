@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 import yt_dlp
-from config import TMP_DIR, YT_DLP_COOKIES_FILE, YT_DLP_COOKIES_BROWSER
+from config import TMP_DIR, YT_DLP_COOKIES_FILE, YT_DLP_COOKIES_BROWSER, DISABLE_SIGNAL_CACHE
 
 
 def _video_id(url: str) -> str:
@@ -26,7 +26,11 @@ def base_ydl_opts(extra: dict) -> dict:
 
 def load_signal_cache(url: str, agent: str) -> dict | None:
     """agent 在打 LLM 前先查有沒有分析過同一支影片（跟看的人是誰無關），
-    有就直接回傳上次的結果，不重打 GPT-4o/Whisper API（省錢也省時間）。"""
+    有就直接回傳上次的結果，不重打 GPT-4o/Whisper API（省錢也省時間）。
+    DISABLE_SIGNAL_CACHE=true 時直接跳過讀取（還是會寫入），方便密集調 prompt 時強制每次重跑，
+    不用手動一個個刪 tmp/*.json。"""
+    if DISABLE_SIGNAL_CACHE:
+        return None
     path = Path(TMP_DIR) / f"{_video_id(url)}_{agent}.json"
     if path.exists():
         # 印出來才看得到「省成本」這件事真的發生了，不然跟真的打一次 API 在 log 上長得一樣

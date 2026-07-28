@@ -33,12 +33,14 @@ AUDIO_PROMPT = """你是一個影片語音品質分析師。
 
 
 def _transcribe(audio_path: Path) -> str:
-    """Whisper 轉錄語音為文字"""
+    """Whisper 轉錄語音為文字。不強制 language，讓 Whisper 自動偵測——
+    YouTube Shorts 是全球平台，強制指定中文會導致非中文語音被硬套中文解碼，
+    輕則亂碼，重則完全幻覺出一段跟原音無關的文字（實測過英文對話被轉成
+    「請不吝點贊訂閱轉發...」這種通用中文結尾詞）。"""
     with open(audio_path, "rb") as f:
         return _client.audio.transcriptions.create(
             model=WHISPER_MODEL,
             file=f,
-            language="zh",
         ).text
 
 
