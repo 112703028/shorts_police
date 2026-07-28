@@ -14,7 +14,7 @@ class AgentState(TypedDict):
     vision_description: Optional[str]  # 畫面實際內容的一句話描述，方便核對 AI 有沒有認真看
     audio_signals: Optional[list[str]]
     tags: Optional[list[str]]
-    scores: Optional[dict]          # ai_generated / emotional_manipulation / originality / information_value / visual_quality
+    scores: Optional[dict]          # authenticity / sincerity / originality / information_value / visual_quality（五個都是分數越高越好）
     overall_score: Optional[int]
     verdict: Optional[str]          # "trash" | "review" | "keep"
     summary: Optional[str]
