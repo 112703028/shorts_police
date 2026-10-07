@@ -32,12 +32,12 @@ skipit_bot/
 ├── agents/
 │   ├── __init__.py
 │   ├── metadata_agent.py  # YouTube metadata via yt-dlp (吳廷翰)
-│   ├── vision_agent.py    # GPT-4o frame analysis (Tim)
-│   ├── audio_agent.py     # Whisper transcription + analysis (Tim)
-│   ├── scoring_agent.py   # Score aggregation (Tim)
+│   ├── vision_agent.py    # GPT-4o frame analysis (王睿忱)
+│   ├── audio_agent.py     # Whisper transcription + analysis (王睿忱)
+│   ├── scoring_agent.py   # Score aggregation (王睿忱)
 │   └── preference_agent.py # Blacklist R/W (吳廷翰)
 ├── graph.py               # LangGraph graph assembly (吳廷翰)
-├── line_bot.py            # FastAPI + LINE webhook (Tim)
+├── line_bot.py            # FastAPI + LINE webhook (王睿忱)
 ├── main.py                # Entrypoint: uvicorn
 ├── data/                  # SQLite DB (gitignored)
 ├── tmp/                   # Downloaded videos/frames (gitignored)
@@ -624,7 +624,7 @@ git commit -m "feat: metadata agent — yt-dlp metadata extraction + GPT-4o anal
 
 ---
 
-## Task 4: Vision Agent (Tim)
+## Task 4: Vision Agent (王睿忱)
 
 **Files:**
 - Create: `agents/vision_agent.py`
@@ -767,7 +767,7 @@ git commit -m "feat: vision agent — GPT-4o frame analysis"
 
 ---
 
-## Task 5: Audio Agent (Tim)
+## Task 5: Audio Agent (王睿忱)
 
 **Files:**
 - Create: `agents/audio_agent.py`
@@ -899,7 +899,7 @@ git commit -m "feat: audio agent — Whisper transcription + GPT-4o content anal
 
 ---
 
-## Task 6: Scoring Agent (Tim)
+## Task 6: Scoring Agent (王睿忱)
 
 **Files:**
 - Create: `agents/scoring_agent.py`
@@ -1354,7 +1354,7 @@ git commit -m "feat: LangGraph pipeline — orchestrator with dynamic routing an
 
 ---
 
-## Task 9: LINE Bot + FastAPI Server (Tim)
+## Task 9: LINE Bot + FastAPI Server (王睿忱)
 
 **Files:**
 - Create: `line_bot.py`

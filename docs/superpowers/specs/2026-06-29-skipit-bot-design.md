@@ -26,7 +26,7 @@ SkipIt Bot 是一個 Agentic AI 系統，自動判斷 YouTube Shorts 是否為�
 
 ### Team Division
 
-| 吳廷翰 | Tim |
+| 吳廷翰 | 王睿忱 |
 |---|---|
 | Orchestrator + Metadata Agent | Vision Agent + Audio Agent |
 | 黑名單邏輯 + 條件邊 + Preference Agent | Scoring Agent |

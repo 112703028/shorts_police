@@ -30,7 +30,7 @@ SkipIt Bot 是一個 Agentic AI 系統，在使用者點開 YouTube Shorts 之�
 
 ### Team Division
 
-| 吳廷翰 | Tim |
+| 吳廷翰 | 王睿忱 |
 |---|---|
 | Orchestrator + Metadata Agent | Vision Agent + Audio Agent |
 | taste_profile 讀寫邏輯 + 條件邊設計 + Preference Agent | Scoring Agent |
